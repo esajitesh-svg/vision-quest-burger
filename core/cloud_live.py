@@ -211,14 +211,14 @@ class LiveMonitorState:
                     pass
         self.video_size = None
 
-    def take_analysis_sample(self, interval_seconds: int) -> bytes | None:
-        """Reserve the newest frame for one analysis at a time."""
+    def take_analysis_sample(self, interval_seconds: int, force: bool = False) -> bytes | None:
+        """Reserve newest frame for one analysis; force bypasses sampling interval."""
         now = time.monotonic()
         with self.lock:
             if self.analysis_busy or not self.latest_jpeg:
                 return None
             interval = min(60, max(10, int(interval_seconds)))
-            if now - self.last_analysis_started < interval:
+            if not force and now - self.last_analysis_started < interval:
                 return None
             self.analysis_busy = True
             self.last_analysis_started = now
