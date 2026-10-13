@@ -1,9 +1,5 @@
---extra-index-url https://download.pytorch.org/whl/cpu
-streamlit>=1.45,<2.0
-transformers==4.51.3
-torch==2.9.1+cpu
-accelerate==1.6.0
+streamlit>=1.51,<2.0
+requests>=2.31,<3.0
 Pillow>=10.0,<13.0
 opencv-python-headless==4.14.0.94
-safetensors>=0.4,<1.0
 streamlit-webrtc==0.70.1
