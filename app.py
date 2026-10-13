@@ -180,7 +180,7 @@ with vision_tab:
         st.subheader("LIVE OPTICAL FEED")
         st.write("Browser camera → WebRTC stream → OpenCV frame processing → sampled vision analysis. Use Analyze Now for an immediate answer or enable periodic sampling.")
         st.warning("Live video is sent to the cloud while streaming. Recordings contain silent video only, are limited to 60 seconds / 25 MB, and are offered as a download after stopping. Use consented test scenes.")
-        live_auto_analyze = st.checkbox("Enable periodic AI analysis", value=True, key="live_auto_analyze")
+        live_auto_analyze = st.checkbox("Enable periodic AI analysis", value=False, key="live_auto_analyze", help="For a safer first test on limited cloud memory, begin with automatic analysis off. Click ANALYZE CURRENT FRAME NOW first; enable periodic sampling after one successful result.")
         live_interval = st.select_slider("Analyze a frame every", options=[15, 30, 60], value=30, key="live_interval_seconds", format_func=lambda x: f"{x} seconds")
         live_mode_label = st.selectbox("Live analysis task", options=list(MODE_LABELS.values()), index=0, key="live_mode_label")
         live_mode = next(k for k, v in MODE_LABELS.items() if v == live_mode_label)
