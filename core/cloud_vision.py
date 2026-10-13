@@ -1,18 +1,25 @@
-"""Small cloud-hosted image understanding through Transformers and SmolVLM."""
+"""Remote vision inference for VisionQuest Cloud.
+
+The shared Streamlit host has limited RAM, so this module sends a resized image
+to Hugging Face Inference Providers instead of loading PyTorch/Transformers inside
+the Streamlit process. Configure HF_TOKEN in Streamlit Secrets.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
 from io import BytesIO
-import gc
-import logging
+import base64
 import os
 import time
+from typing import Any
 
+import requests
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-MODEL_ID = "HuggingFaceTB/SmolVLM-256M-Instruct"
+MODEL_ID = os.getenv("HF_VISION_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct:fastest")
+INFERENCE_URL = "https://router.huggingface.co/v1/chat/completions"
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+REQUEST_TIMEOUT = (10, 90)
 
 MODES: dict[str, str] = {
     "scene": "Describe the visible scene in 2–4 concise sentences. Mention only clearly visible objects, actions, and setting.",
@@ -39,8 +46,30 @@ class VisionResult:
     processed_size: tuple[int, int]
 
 
+def get_hf_token() -> str:
+    """Read the secret from the hosting platform without ever displaying it."""
+    token = os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        import streamlit as st
+        token = str(st.secrets.get("HF_TOKEN", "")).strip()
+    except Exception:
+        token = ""
+    return token
+
+
+def model_status() -> tuple[bool, str]:
+    if not get_hf_token():
+        return False, (
+            "Remote vision is not configured. Add HF_TOKEN under Streamlit → Manage app → Settings → Secrets. "
+            "Do not paste the token into chat or GitHub."
+        )
+    return True, f"Remote vision endpoint configured ({MODEL_ID})."
+
+
 def prepare_image(image_bytes: bytes, max_side: int = 512) -> tuple[Image.Image, tuple[int, int]]:
-    """Validate and downscale an uploaded image before inference."""
+    """Validate and downscale an uploaded image before remote inference."""
     if not image_bytes:
         raise ValueError("Choose an image first.")
     if len(image_bytes) > MAX_UPLOAD_BYTES:
@@ -70,37 +99,20 @@ def build_prompt(mode: str, focus: str = "") -> str:
     return prompt + "\n\nKeep the answer concise and directly about this image."
 
 
-def model_status() -> tuple[bool, str]:
-    return True, "Cloud model loads on first analysis; no local Ollama installation required."
-
-
-def _cpu_count() -> int:
-    return os.cpu_count() or 1
-
-
-@lru_cache(maxsize=1)
-def _load_model():
-    """Load one cached, reduced-memory CPU model instance."""
-    import torch
-    from transformers import AutoModelForVision2Seq, AutoProcessor
-
-    # Keep the CPU pool small on shared cloud hosts and load 16-bit weights
-    # directly from safetensors to avoid a full FP32 model copy in RAM.
-    torch.set_num_threads(1)
-    logging.getLogger(__name__).info(
-        "VisionQuest: loading %s with bfloat16 CPU weights; image analysis is starting.",
-        MODEL_ID,
-    )
-    processor = AutoProcessor.from_pretrained(MODEL_ID)
-    model = AutoModelForVision2Seq.from_pretrained(
-        MODEL_ID,
-        torch_dtype=torch.bfloat16,
-        low_cpu_mem_usage=True,
-        attn_implementation="eager",
-    )
-    model.eval()
-    logging.getLogger(__name__).info("VisionQuest: vision model loaded successfully.")
-    return processor, model
+def _extract_response_text(payload: dict[str, Any]) -> str:
+    try:
+        content = payload["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("The remote vision service returned an unexpected response format.") from exc
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        pieces = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                pieces.append(str(part.get("text", "")))
+        return "\n".join(pieces).strip()
+    return str(content or "").strip()
 
 
 def analyze_image(
@@ -109,64 +121,83 @@ def analyze_image(
     focus: str = "",
     max_side: int = 512,
 ) -> VisionResult:
-    """Run one image analysis and return observation plus processing metadata."""
-    import torch
+    """Analyze one image using a remote hosted VLM without loading it into app RAM."""
+    token = get_hf_token()
+    if not token:
+        raise RuntimeError(
+            "Vision AI has not been configured. Add HF_TOKEN in Streamlit Secrets "
+            "with Inference Providers permission, then reboot the app."
+        )
 
     image, original_size = prepare_image(image_bytes, max_side=max_side)
-    try:
-        import streamlit as st
-        # Streamlit stores processor/model once per app process.
-        processor, model = _streamlit_cached_model()
-    except ImportError:
-        processor, model = _load_model()
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG", quality=82, optimize=True)
+    image_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+    data_url = "data:image/jpeg;base64," + image_b64
 
-    chat = [{
-        "role": "user",
-        "content": [{"type": "image"}, {"type": "text", "text": build_prompt(mode, focus)}],
-    }]
-    prompt = processor.apply_chat_template(chat, add_generation_prompt=True)
-    inputs = processor(text=prompt, images=[image], return_tensors="pt")
+    payload = {
+        "model": MODEL_ID,
+        "stream": False,
+        "max_tokens": 160,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": build_prompt(mode, focus)},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        }],
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
     started = time.perf_counter()
     try:
-        with torch.inference_mode():
-            generated_ids = model.generate(
-                **inputs,
-                max_new_tokens=48,
-                do_sample=False,
-                num_beams=1,
-                use_cache=False,
-            )
-        new_tokens = generated_ids[:, inputs["input_ids"].shape[1]:]
-        answer = processor.batch_decode(new_tokens, skip_special_tokens=True)[0].strip()
-    except (RuntimeError, MemoryError) as exc:
-        logging.getLogger(__name__).exception("VisionQuest image inference failed")
-        message = str(exc).lower()
-        if "memory" in message or "alloc" in message or isinstance(exc, MemoryError):
-            raise RuntimeError(
-                "The cloud host ran short of memory during image analysis. "
-                "Reboot the app, keep the image profile on Fast (384 px), and try one analysis at a time. "
-                "If this repeats, the hosted service needs more RAM or a remote inference endpoint."
-            ) from exc
+        response = requests.post(
+            INFERENCE_URL,
+            headers=headers,
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.Timeout as exc:
         raise RuntimeError(
-            f"The vision model could not finish this analysis ({type(exc).__name__}). "
-            "Try Fast (384 px), then check the latest Streamlit logs if it repeats."
+            "The remote vision request timed out after 90 seconds. Check the provider/model status and retry once."
+        ) from exc
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"Could not reach the remote vision service ({type(exc).__name__}). Check the network and retry."
         ) from exc
 
+    if response.status_code in (401, 403):
+        raise RuntimeError(
+            "Hugging Face rejected HF_TOKEN. Check that the secret is valid and has Inference Providers permission."
+        )
+    if response.status_code in (402, 429):
+        raise RuntimeError(
+            "The hosted inference provider reported a billing/credit or rate-limit issue. Check Hugging Face Inference Providers usage before retrying."
+        )
+    if response.status_code in (503, 504):
+        raise RuntimeError(
+            "The selected vision model/provider is loading or temporarily unavailable. Wait briefly and retry."
+        )
+    if not response.ok:
+        detail = ""
+        try:
+            detail = str(response.json().get("error", ""))[:300]
+        except Exception:
+            detail = response.text[:300]
+        raise RuntimeError(
+            f"Remote vision request failed with HTTP {response.status_code}. {detail or 'No provider detail was returned.'}"
+        )
+
+    try:
+        answer = _extract_response_text(response.json())
+    except ValueError as exc:
+        raise RuntimeError("The remote vision service did not return valid JSON.") from exc
     elapsed = round(time.perf_counter() - started, 2)
     if not answer:
-        raise RuntimeError("The vision model returned an empty answer. Try another image or retry once.")
+        raise RuntimeError("The remote vision model returned an empty answer. Try another frame.")
     if len(answer) > 6000:
         answer = answer[:6000].rsplit(" ", 1)[0] + "…"
-    del inputs, generated_ids, new_tokens
-    gc.collect()
     return VisionResult(answer, MODEL_ID, elapsed, original_size, image.size)
-
-
-def _streamlit_cached_model():
-    import streamlit as st
-
-    @st.cache_resource(show_spinner=False)
-    def load_once():
-        return _load_model()
-
-    return load_once()
