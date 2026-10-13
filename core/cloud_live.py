@@ -91,7 +91,7 @@ class LiveMonitorState:
         self.recording_notice = ""
 
         self.analysis_busy = False
-        self.last_analysis_started = 0.0
+        self.last_analysis_started: float | None = None
         self.latest_observation: dict[str, Any] | None = None
         self.latest_analysis_error = ""
 
@@ -218,7 +218,7 @@ class LiveMonitorState:
             if self.analysis_busy or not self.latest_jpeg:
                 return None
             interval = min(60, max(10, int(interval_seconds)))
-            if not force and now - self.last_analysis_started < interval:
+            if not force and self.last_analysis_started is not None and now - self.last_analysis_started < interval:
                 return None
             self.analysis_busy = True
             self.last_analysis_started = now
