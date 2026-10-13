@@ -248,36 +248,60 @@ with vision_tab:
                     snapshot_jpeg, frame_metrics, frame_count, last_frame_time = live_state.snapshot()
                     is_playing = bool(live_ctx.state.playing)
 
-                    if is_playing and live_auto_analyze:
+                    manual_analyze = st.button(
+                        "⚡ ANALYZE CURRENT FRAME NOW",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=(not is_playing or not snapshot_jpeg or live_state.get_status()["analysis_busy"]),
+                        key="manual_live_analyze",
+                    )
+
+                    def analyze_and_store(sample_bytes):
+                        result = analyze_image(
+                            sample_bytes,
+                            mode=live_mode,
+                            focus=live_question,
+                            max_side=live_max_side,
+                        )
+                        observation = {
+                            "text": result.text,
+                            "mode": live_mode,
+                            "model": result.model,
+                            "elapsed": result.elapsed_seconds,
+                            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                            "sequence": int(datetime.now(timezone.utc).timestamp() * 1000),
+                            "source_hash": hashlib.sha256(sample_bytes).hexdigest(),
+                        }
+                        live_state.finish_analysis(observation=observation)
+                        st.session_state["latest_result"] = {
+                            "text": result.text,
+                            "mode": f"Live · {live_mode}",
+                            "model": result.model,
+                            "elapsed": result.elapsed_seconds,
+                            "timestamp": observation["timestamp"],
+                            "source_hash": observation["source_hash"],
+                            "origin": "live",
+                        }
+                        return observation
+
+                    if manual_analyze:
+                        sample = live_state.take_analysis_sample(live_interval, force=True)
+                        if sample is None:
+                            st.warning("No fresh frame is ready or the analyzer is busy. Wait a moment and retry.")
+                        else:
+                            try:
+                                with st.spinner("Analyzing the current OpenCV frame…"):
+                                    analyze_and_store(sample)
+                                st.rerun(scope="app")
+                            except Exception as exc:
+                                live_state.finish_analysis(error=f"{type(exc).__name__}: {exc}")
+                                st.error(f"Live image analysis failed: {type(exc).__name__}: {exc}")
+                    elif is_playing and live_auto_analyze:
                         sample = live_state.take_analysis_sample(live_interval)
                         if sample is not None:
                             try:
                                 with st.spinner("Analyzing the latest live frame…"):
-                                    result = analyze_image(
-                                        sample,
-                                        mode=live_mode,
-                                        focus=live_question,
-                                        max_side=live_max_side,
-                                    )
-                                observation = {
-                                    "text": result.text,
-                                    "mode": live_mode,
-                                    "model": result.model,
-                                    "elapsed": result.elapsed_seconds,
-                                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-                                    "sequence": int(datetime.now(timezone.utc).timestamp() * 1000),
-                                    "source_hash": hashlib.sha256(sample).hexdigest(),
-                                }
-                                live_state.finish_analysis(observation=observation)
-                                st.session_state["latest_result"] = {
-                                    "text": result.text,
-                                    "mode": f"Live · {live_mode}",
-                                    "model": result.model,
-                                    "elapsed": result.elapsed_seconds,
-                                    "timestamp": observation["timestamp"],
-                                    "source_hash": observation["source_hash"],
-                                    "origin": "live",
-                                }
+                                    analyze_and_store(sample)
                                 st.rerun(scope="app")
                             except Exception as exc:
                                 live_state.finish_analysis(error=f"{type(exc).__name__}: {exc}")
@@ -362,6 +386,16 @@ with vision_tab:
                         st.caption(
                             f"{observation['mode']} · {observation['model']} · "
                             f"{observation['elapsed']:.1f}s · {observation['timestamp']}"
+                        )
+                        st.components.v1.html(
+                            build_speech_html(
+                                observation["text"],
+                                language=st.session_state.get("voice_language", "en-IN"),
+                                rate=float(st.session_state.get("voice_rate", 0.92)),
+                                widget_label="🔊 PRONOUNCE OBSERVATION",
+                            ),
+                            height=92,
+                            scrolling=False,
                         )
                         if st.button("Load observation into Voice tab", key="live_to_voice"):
                             st.session_state["voice_text"] = observation["text"]
