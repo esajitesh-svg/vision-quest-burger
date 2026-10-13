@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
+import gc
 import logging
 import os
 import time
@@ -126,17 +127,38 @@ def analyze_image(
     prompt = processor.apply_chat_template(chat, add_generation_prompt=True)
     inputs = processor(text=prompt, images=[image], return_tensors="pt")
     started = time.perf_counter()
-    with torch.inference_mode():
-        generated_ids = model.generate(
-            **inputs, max_new_tokens=48, do_sample=False, num_beams=1, use_cache=False
-        )
-    new_tokens = generated_ids[:, inputs["input_ids"].shape[1]:]
-    answer = processor.batch_decode(new_tokens, skip_special_tokens=True)[0].strip()
+    try:
+        with torch.inference_mode():
+            generated_ids = model.generate(
+                **inputs,
+                max_new_tokens=48,
+                do_sample=False,
+                num_beams=1,
+                use_cache=False,
+            )
+        new_tokens = generated_ids[:, inputs["input_ids"].shape[1]:]
+        answer = processor.batch_decode(new_tokens, skip_special_tokens=True)[0].strip()
+    except (RuntimeError, MemoryError) as exc:
+        logging.getLogger(__name__).exception("VisionQuest image inference failed")
+        message = str(exc).lower()
+        if "memory" in message or "alloc" in message or isinstance(exc, MemoryError):
+            raise RuntimeError(
+                "The cloud host ran short of memory during image analysis. "
+                "Reboot the app, keep the image profile on Fast (384 px), and try one analysis at a time. "
+                "If this repeats, the hosted service needs more RAM or a remote inference endpoint."
+            ) from exc
+        raise RuntimeError(
+            f"The vision model could not finish this analysis ({type(exc).__name__}). "
+            "Try Fast (384 px), then check the latest Streamlit logs if it repeats."
+        ) from exc
+
     elapsed = round(time.perf_counter() - started, 2)
     if not answer:
         raise RuntimeError("The vision model returned an empty answer. Try another image or retry once.")
     if len(answer) > 6000:
         answer = answer[:6000].rsplit(" ", 1)[0] + "…"
+    del inputs, generated_ids, new_tokens
+    gc.collect()
     return VisionResult(answer, MODEL_ID, elapsed, original_size, image.size)
 
 
