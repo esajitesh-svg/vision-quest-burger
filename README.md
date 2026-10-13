@@ -4,8 +4,9 @@ This is a **cloud-deployment edition** of the VisionQuest demo. Unlike the local
 
 ## Important differences from the local edition
 
-- Use **browser camera capture** (`st.camera_input`) or image upload. A cloud server cannot use `cv2.VideoCapture(0)` to access a visitor's webcam.
-- This edition supports one still image per analysis. It does not provide continuous live video monitoring.
+- Still photos use browser camera capture (`st.camera_input`) or image upload. The **Live camera & recording** tab uses WebRTC to stream the visitor's camera to the cloud server; OpenCV processes frames on the server. It does not use `cv2.VideoCapture(0)` to access a remote visitor's webcam.
+- Live mode offers periodic AI analysis (15, 30, or 60 seconds) and silent MP4 recording (maximum 60 seconds or 25 MB). The user must explicitly start and stop the stream/recording. A recording is held temporarily for download; it is not a permanent server-side archive.
+- WebRTC requires HTTPS and network access to STUN/TURN. The app configures a public STUN server by default. If a device/network cannot connect, configure `TURN_SERVER_URL`, `TURN_USERNAME`, and `TURN_CREDENTIAL` in Streamlit Secrets with credentials from a TURN provider. Audio is not recorded.
 - The demo vault is a single shared SQLite database on the app host and is protected by one app password. Anyone with that password can see and export the same demo records.
 - The default Streamlit Community Cloud filesystem should not be treated as durable storage. A restart/redeploy can cause database loss. Do not store real medical or sensitive personal information. Use fictional demo records only.
 - This is a prototype, not a medical device or validated dementia-support system.
@@ -53,6 +54,16 @@ The phone or laptop camera is captured **in the browser** and the image bytes ar
 - It runs on cloud CPU by default, no local Ollama install or API token is required for downloading this public model.
 - The first inference may be slow due to model download and cold loading. Small images and a short output limit reduce resource use but don't guarantee a particular response time.
 - Streamlit Community Cloud has resource limits, so if the instance runs out of memory, use a hosted model-inference service or a hosting platform with more compute. Limits can change: <https://docs.streamlit.io/deploy/streamlit-community-cloud/manage-your-app>.
+
+## Live camera, OpenCV, and recording
+
+1. Open **Vision → Live camera & recording** on the deployed HTTPS site.
+2. Allow camera permission and click **START** inside the WebRTC player. If the status stays idle, check the browser permission and network connectivity.
+3. Choose a live analysis mode and interval of 15, 30, or 60 seconds. OpenCV resizes frames, reports rough brightness/focus metrics, and can apply optional contrast enhancement before sampled frames are analyzed by SmolVLM.
+4. Click **Start MP4 recording** to record a silent clip. Stop it manually or let the selected 15/30/60-second limit end it; the final clip is offered as a download. Temporary files are removed after finalization. Each browser session has its own camera and recording state.
+5. Stop the WebRTC stream when finished. The stream sends live images to the cloud host while it is running; do not use it without permission from anyone in view.
+
+This implementation is live WebRTC video plus periodic single-frame model inference, not model inference on every frame. CPU inference can be slow. Public STUN may not work on every network; if required, configure TURN server credentials through host secrets. Never place TURN credentials in source control.
 
 ## Voice module (browser text-to-speech)
 
