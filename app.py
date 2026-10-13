@@ -38,36 +38,83 @@ st.set_page_config(
 
 CSS = r"""
 <style>
-:root { color-scheme: light; }
-html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] { background:#f4f6fc !important; color:#1a2440 !important; }
-[data-testid="stMainBlockContainer"] { max-width:1320px; padding-top:1.2rem; padding-bottom:3rem; }
-[data-testid="stMarkdownContainer"], [data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li, [data-testid="stCaptionContainer"], [data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] *, label, .stRadio label, .stCheckbox label { color:#26314e !important; }
-h1,h2,h3,h4 { color:#151f3b !important; letter-spacing:-.02em; }
-a { color:#5548d8 !important; }
-.hero { padding:2rem 2.2rem; border-radius:24px; margin:.15rem 0 1.2rem; color:#fff !important; background:radial-gradient(circle at 90% 0%,rgba(144,129,255,.5),transparent 30%),linear-gradient(115deg,#10182f 0%,#28285e 52%,#5f50d5 100%); box-shadow:0 15px 38px rgba(49,47,115,.14); }
-.hero * { color:#fff !important; }
-.hero .kicker { text-transform:uppercase; letter-spacing:.12em; font-size:.75rem; font-weight:800; opacity:.88; }
-.hero h1 { font-size:clamp(2rem,3vw,2.75rem); margin:.65rem 0 .35rem; line-height:1.1; }
-.hero p { color:#e3e7ff !important; max-width:800px; line-height:1.65; margin:0; }
-.pill { display:inline-block; padding:.28rem .6rem; margin-top:.9rem; border:1px solid rgba(255,255,255,.26); background:rgba(255,255,255,.1); border-radius:999px; font-size:.78rem; }
-[data-testid="stMetric"] { background:#fff !important; border:1px solid #e0e6f2 !important; border-radius:15px; padding:.85rem !important; }
-[data-testid="stMetric"] * { color:#192541 !important; }
-[data-baseweb="input"] input, [data-baseweb="textarea"] textarea, [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea { background:#fff !important; color:#1b2541 !important; border-color:#cad3e4 !important; }
-[data-baseweb="select"] * { color:#1b2541 !important; }
-[data-testid="stFileUploader"] { background:#fff !important; border:1px dashed #a9b5cd !important; border-radius:14px; padding:.3rem; }
-[data-testid="stFileUploader"] * { color:#26314e !important; }
-.stButton button, [data-testid="stDownloadButton"] button { border-radius:11px !important; font-weight:700 !important; min-height:2.55rem; }
-.stButton button[kind="primary"], [data-testid="stDownloadButton"] button[kind="primary"] { background:#594bd6 !important; color:white !important; border:1px solid #594bd6 !important; }
-.stButton button[kind="primary"] * { color:white !important; }
-[data-testid="stVerticalBlockBorderWrapper"] { background:#fff !important; border-color:#e1e7f1 !important; border-radius:16px !important; }
-[data-testid="stAlert"] { border-radius:12px; }
-.result { padding:1rem 1.15rem; border:1px solid #d9def8; border-left:4px solid #6559dc; background:#fbfbff; border-radius:12px; color:#202b47; line-height:1.65; white-space:pre-wrap; }
-.small-note { font-size:.86rem; color:#65728a !important; }
-hr { border-color:#e1e7f1 !important; }
-@media(max-width:720px) { .hero { padding:1.3rem; border-radius:18px; } .hero h1 { font-size:1.9rem; } }
+:root { color-scheme: dark; }
+html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] { background:#05090e !important; color:#c5d9e3 !important; }
+[data-testid="stHeader"] { background:rgba(5,9,14,.94) !important; }
+[data-testid="stMainBlockContainer"] { max-width:1500px; padding-top:1rem; padding-bottom:3rem; }
+[data-testid="stMarkdownContainer"], [data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li, [data-testid="stCaptionContainer"], [data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] *, label, .stRadio label, .stCheckbox label { color:#b9ccd7 !important; }
+h1,h2,h3,h4 { color:#e3f7ff !important; letter-spacing:-.02em; }
+a { color:#46eaff !important; }
+.hero { padding:1.8rem 2rem; border-radius:18px; margin:.15rem 0 1.2rem; color:#e6fbff !important; background:radial-gradient(circle at 90% 0%,rgba(0,220,255,.13),transparent 30%),linear-gradient(115deg,#071017 0%,#0b1b25 55%,#102a37 100%); border:1px solid rgba(64,225,255,.32); box-shadow:0 0 28px rgba(0,208,240,.08), inset 0 0 28px rgba(0,190,225,.035); }
+.hero * { color:#e6fbff !important; }
+.hero .kicker { text-transform:uppercase; letter-spacing:.16em; font-size:.72rem; font-weight:800; color:#52edff !important; }
+.hero h1 { font-size:clamp(2rem,3vw,2.7rem); margin:.55rem 0 .35rem; line-height:1.1; text-transform:uppercase; }
+.hero p { color:#a8c5d3 !important; max-width:900px; line-height:1.65; margin:0; }
+.pill { display:inline-block; padding:.28rem .6rem; margin:.75rem .3rem 0 0; border:1px solid rgba(73,228,255,.28); background:rgba(0,207,238,.06); border-radius:3px; font-size:.76rem; letter-spacing:.04em; }
+[data-testid="stMetric"] { background:linear-gradient(135deg,#09151d,#0b1b24) !important; border:1px solid #21404d !important; border-radius:10px; padding:.8rem !important; }
+[data-testid="stMetric"] * { color:#d5f6ff !important; }
+[data-testid="stMetricLabel"] { color:#69dbe9 !important; }
+[data-baseweb="input"] input, [data-baseweb="textarea"] textarea, [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea { background:#09151c !important; color:#d9f4fa !important; border-color:#254653 !important; }
+[data-baseweb="select"] > div { background:#09151c !important; border-color:#254653 !important; }
+[data-baseweb="select"] * { color:#d9f4fa !important; }
+[data-testid="stFileUploader"] { background:#08141b !important; border:1px dashed #2e6170 !important; border-radius:8px; padding:.3rem; }
+[data-testid="stFileUploader"] * { color:#c5d9e3 !important; }
+.stButton button, [data-testid="stDownloadButton"] button { border-radius:5px !important; font-weight:750 !important; min-height:2.6rem; letter-spacing:.035em; transition:all .16s ease; }
+.stButton button[kind="primary"], [data-testid="stDownloadButton"] button[kind="primary"] { background:#00cfe8 !important; color:#031015 !important; border:1px solid #31efff !important; box-shadow:0 0 15px rgba(0,221,247,.16); }
+.stButton button[kind="primary"] *, [data-testid="stDownloadButton"] button[kind="primary"] * { color:#031015 !important; }
+.stButton button:hover { border-color:#48efff !important; box-shadow:0 0 14px rgba(0,221,247,.14); }
+[data-testid="stVerticalBlockBorderWrapper"] { background:#08141b !important; border-color:#1e3d49 !important; border-radius:10px !important; }
+[data-testid="stAlert"] { border-radius:7px; }
+[data-testid="stTabs"] [data-baseweb="tab-list"] { gap:.25rem; border-bottom:1px solid #1d414e; }
+[data-testid="stTabs"] [data-baseweb="tab"] { background:transparent; padding:.72rem .8rem; }
+[data-testid="stTabs"] [aria-selected="true"] { color:#5eecff !important; border-bottom-color:#00d8f2 !important; }
+.result { padding:1rem 1.15rem; border:1px solid #214d5a; border-left:3px solid #00d7ef; background:#07151c; border-radius:6px; color:#d1eef5; line-height:1.65; white-space:pre-wrap; box-shadow:inset 0 0 20px rgba(0,190,225,.035); }
+.small-note { font-size:.86rem; color:#86a7b6 !important; }
+.hud-label { color:#59eaff !important; font-size:.74rem; font-weight:800; letter-spacing:.15em; text-transform:uppercase; }
+.hud-rule { height:1px; width:100%; background:linear-gradient(90deg,#00d7ef,rgba(0,215,239,.1),transparent); margin:.55rem 0 1rem; }
+@keyframes vqSpin { to { transform:rotate(360deg); } }
+@keyframes vqPulse { 0%,100% { box-shadow:0 0 15px rgba(0,225,255,.22), inset 0 0 18px rgba(0,225,255,.08); } 50% { box-shadow:0 0 36px rgba(0,225,255,.48), inset 0 0 25px rgba(0,225,255,.17); } }
+@keyframes vqSweep { 0% { transform:rotate(0deg); } 100% { transform:rotate(360deg); } }
+.vq-splash { position:fixed; inset:0; width:100vw; height:100vh; z-index:999999; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1.2rem; background:radial-gradient(circle at 50% 45%,#102a36 0%,#07121a 32%,#020507 74%); color:#bdf8ff; overflow:hidden; text-align:center; }
+.vq-splash:before, .vq-splash:after { content:""; position:absolute; width:82vw; height:82vw; max-width:900px; max-height:900px; border:1px solid rgba(48,216,244,.08); border-radius:50%; }
+.vq-splash:after { width:65vw; height:65vw; border-color:rgba(48,216,244,.10); }
+.vq-splash-core { position:relative; width:210px; height:210px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-direction:column; border:1px solid rgba(86,238,255,.8); background:radial-gradient(circle,#13333e 0%,#06151d 63%,#02070a 100%); animation:vqPulse 2.1s ease-in-out infinite; z-index:2; }
+.vq-ring { position:absolute; inset:-22px; border:2px solid transparent; border-top-color:#51efff; border-right-color:rgba(61,225,255,.26); border-radius:50%; animation:vqSpin 2.2s linear infinite; }
+.vq-ring.inner { inset:-9px; border-width:1px; border-top-color:#d2fcff; border-left-color:rgba(50,217,242,.38); animation-duration:3.4s; animation-direction:reverse; }
+.vq-orbit { position:absolute; width:245px; height:245px; border:1px dashed rgba(72,218,246,.33); border-radius:50%; animation:vqSweep 11s linear infinite; }
+.vq-orbit:before { content:""; position:absolute; top:27px; left:27px; width:7px; height:7px; border-radius:50%; background:#a6fbff; box-shadow:0 0 12px #42eaff; }
+.vq-splash-title { font-size:1.15rem; letter-spacing:.13em; font-weight:900; color:#e1fcff; text-shadow:0 0 18px rgba(0,221,255,.6); }
+.vq-splash-sub { position:relative; z-index:3; color:#68d9e9; font-size:.7rem; letter-spacing:.2em; text-transform:uppercase; }
+.vq-splash-line { width:210px; height:2px; background:#14333d; overflow:hidden; position:relative; z-index:3; }
+.vq-splash-line:after { content:""; display:block; height:100%; width:35%; background:#6af1ff; box-shadow:0 0 9px #45ecff; animation:vqSweep 1.1s linear infinite; }
+@media(max-width:720px) { .hero { padding:1.25rem; border-radius:10px; } .hero h1 { font-size:1.9rem; } .vq-splash-core { width:175px; height:175px; } .vq-orbit { width:208px; height:208px; } }
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
+
+# One-time cinematic boot splash per browser session.
+if not st.session_state.get("vq_intro_shown", False):
+    import time as _intro_time
+    splash = st.empty()
+    splash.markdown(
+        """
+        <div class="vq-splash">
+          <div class="vq-orbit"></div>
+          <div class="vq-splash-core">
+            <div class="vq-ring"></div><div class="vq-ring inner"></div>
+            <div style="font-size:2rem;line-height:1;margin-bottom:.4rem;">◉</div>
+            <div class="vq-splash-title">VISIONQUEST</div>
+            <div class="vq-splash-sub" style="margin-top:.45rem;">Visual memory system</div>
+          </div>
+          <div class="vq-splash-sub">Initializing perception interface</div>
+          <div class="vq-splash-line"></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    _intro_time.sleep(2.4)
+    splash.empty()
+    st.session_state["vq_intro_shown"] = True
 
 
 def get_secret(name: str) -> str:
@@ -123,19 +170,20 @@ m2.metric("Memory notes", len(memories))
 m3.metric("Vision model", "Ready to load" if status[0] else "Setup issue")
 st.caption("Online demo: image processing and model inference happen on the hosting server. Uploaded/captured images are not written to disk by this app, but the hosting service processes the bytes. Use only fictional demo data until security and storage are production-ready.")
 
-vision_tab, people_tab, memory_tab, voice_tab, search_tab, settings_tab = st.tabs(["📷 Vision", "👤 People", "🧠 Memories", "🔊 Voice", "🔎 Search", "⚙️ About & status"])
+vision_tab, people_tab, memory_tab, voice_tab, search_tab, settings_tab = st.tabs(["⚡ LIVE HUD", "👤 People", "🧠 Memories", "🔊 Voice", "🔎 Search", "⚙️ System"])
 
 with vision_tab:
     left, right = st.columns([1.05, .95], gap="large")
     with left:
         st.subheader("Give VisionQuest an image")
-        source_tab, live_tab, upload_tab = st.tabs(["📸 Capture photo", "🎥 Live camera & recording", "📁 Upload image"])
+        live_tab, source_tab, upload_tab = st.tabs(["🎥 LIVE SENSING // WEBCAM", "📸 Capture photo", "📁 Upload image"])
         with source_tab:
             camera_image = st.camera_input("Capture a photo", key="cloud_camera_input", help="Capture one still image in this device's browser over HTTPS.")
         with live_tab:
-            st.subheader("Live webcam monitor")
-            st.write("Start the camera stream below. OpenCV processes each incoming frame on the cloud server; the vision model can analyze a still frame at the interval you choose.")
-            st.warning("Live video is sent to the cloud server while streaming. Recording is silent video only, limited to 60 seconds and 25 MB, and is offered for download after you stop. Use consented, fictional test scenes.")
+            st.markdown("<div class='hud-label'>Primary visual interface // live sensing</div><div class='hud-rule'></div>", unsafe_allow_html=True)
+            st.subheader("LIVE OPTICAL FEED")
+            st.write("Browser camera → WebRTC stream → OpenCV frame processing → sampled vision analysis. Use Analyze Now for an immediate answer or enable periodic sampling.")
+            st.warning("Live video is sent to the cloud while streaming. Recordings contain silent video only, are limited to 60 seconds / 25 MB, and are offered as a download after stopping. Use consented test scenes.")
             live_auto_analyze = st.checkbox("Enable periodic AI analysis", value=True, key="live_auto_analyze")
             live_interval = st.select_slider("Analyze a frame every", options=[15, 30, 60], value=30, key="live_interval_seconds", format_func=lambda x: f"{x} seconds")
             live_mode_label = st.selectbox("Live analysis task", options=list(MODE_LABELS.values()), index=0, key="live_mode_label")
