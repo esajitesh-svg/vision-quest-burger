@@ -22,7 +22,7 @@ def test_live_frame_processing_resizes_and_returns_jpeg():
     frame, encoded, metrics = process_live_frame(_test_frame(1280, 720), max_side=640)
     assert frame.shape[1] <= 640
     assert frame.shape[0] <= 640
-    assert encoded.startswith(b"\\xff\\xd8")
+    assert encoded[:2] == bytes([255, 216])
     assert metrics["width"] == frame.shape[1]
     assert metrics["height"] == frame.shape[0]
     assert "brightness" in metrics
