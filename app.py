@@ -1,4 +1,4 @@
-"""Cloud-hosted Smriti AI / VisionQuest demo.
+"""Voice-upgraded cloud-hosted Smriti AI / VisionQuest demo.
 
 This edition uses browser camera capture (HTTPS) or image upload. The vision model
 runs on the hosting server via Transformers; it does not require the user's Ollama.
@@ -79,7 +79,7 @@ def get_secret(name: str) -> str:
 def password_gate() -> bool:
     configured = get_secret("APP_PASSWORD")
     if not configured:
-        st.markdown("<div class='hero'><div class='kicker'>Smriti AI · Cloud setup</div><h1>Finish secure setup</h1><p>Add an app password in your hosting platform's Secrets settings before using this cloud demo.</p></div>", unsafe_allow_html=True)
+        st.markdown("<div class='hero'><div class='kicker'>Smriti AI · Cloud setup</div><h1>Finish secure setup</h1><p>The voice-upgraded VisionQuest build is deployed, but setup is incomplete. Add an app password in your hosting platform's Secrets settings to unlock the Vision, Memories, and Voice tabs.</p><span class='pill'>🔊 Voice companion included</span></div>", unsafe_allow_html=True)
         st.code('APP_PASSWORD = "replace-with-a-long-unique-password"', language="toml")
         st.warning("Do not put the password in your source code or Git repository. Configure it using the hosting platform's Secrets feature, then reboot the app.")
         return False
@@ -105,7 +105,7 @@ if not password_gate():
 init_db()
 
 with st.container():
-    st.markdown("<div class='hero'><div class='kicker'>SMRITI AI · CLOUD EDITION</div><h1>VisionQuest</h1><p>A vision-first assistant for describing what a camera or image shows, with manually curated memory notes. The AI reports visual observations; it does not identify people or diagnose conditions.</p><span class='pill'>☁️ Hosted AI · HTTPS camera input · Available across devices</span></div>", unsafe_allow_html=True)
+    st.markdown("<div class='hero'><div class='kicker'>SMRITI AI · CLOUD EDITION</div><h1>VisionQuest</h1><p>A vision-first assistant for describing what a camera or image shows, with manually curated memory notes. The AI reports visual observations; it does not identify people or diagnose conditions.</p><span class='pill'>☁️ Hosted AI · HTTPS camera input</span><span class='pill'>🔊 Voice companion</span><span class='pill'>🌐 Available across devices</span></div>", unsafe_allow_html=True)
 
 status = model_status()
 people = list_people()
