@@ -1,4 +1,6 @@
-# Smriti AI / VisionQuest — Cloud Edition
+# Smriti AI / VisionQuest — Stark-inspired Cloud HUD
+
+The primary **LIVE HUD** workspace opens on the live camera panel with a short animated VisionQuest boot splash. The interface uses a dark, cyan-accented command-console style. Live mode supports automatic interval sampling and **Analyze Current Frame Now** for immediate scene, object/location, visible-text, short-description, or custom-question analysis. A browser speech button can pronounce the latest observation.
 
 This is a **cloud-deployment edition** of the VisionQuest demo. Unlike the local Ollama build, it runs the small public vision model `HuggingFaceTB/SmolVLM-256M-Instruct` on the hosting server using Transformers. Users can open a hosted HTTPS URL from a phone, tablet, or computer.
 
@@ -57,10 +59,12 @@ The phone or laptop camera is captured **in the browser** and the image bytes ar
 
 ## Live camera, OpenCV, and recording
 
-1. Open **Vision → Live camera & recording** on the deployed HTTPS site.
-2. Allow camera permission and click **START** inside the WebRTC player. If the status stays idle, check the browser permission and network connectivity.
-3. Choose a live analysis mode and interval of 15, 30, or 60 seconds. OpenCV resizes frames, reports rough brightness/focus metrics, and can apply optional contrast enhancement before sampled frames are analyzed by SmolVLM.
-4. Click **Start MP4 recording** to record a silent clip. Stop it manually or let the selected 15/30/60-second limit end it; the final clip is offered as a download. Temporary files are removed after finalization. Each browser session has its own camera and recording state.
+1. Open the **LIVE HUD** main tab, then **LIVE SENSING // WEBCAM**.
+2. Allow camera permission and click **START** inside the WebRTC player. If the status stays idle, check browser permission and network connectivity.
+3. Choose a live analysis mode: scene overview, objects and approximate positions, visible-text reading, short spoken description, or custom visual question.
+4. Use **Analyze Current Frame Now** for an immediate answer, or enable periodic analysis at 15, 30, or 60 seconds. OpenCV resizes frames, reports rough brightness/focus metrics, and can apply optional contrast enhancement before sampled frames are analyzed by SmolVLM.
+5. Use **Pronounce Observation** to read a result aloud. Browser voice availability varies by device and language.
+6. Click **Start MP4 recording** to record a silent clip. Stop it manually or let the selected 15/30/60-second limit end it; the final clip is offered as a download. Temporary files are removed after finalization. Each browser session has its own camera and recording state.
 5. Stop the WebRTC stream when finished. The stream sends live images to the cloud host while it is running; do not use it without permission from anyone in view.
 
 This implementation is live WebRTC video plus periodic single-frame model inference, not model inference on every frame. CPU inference can be slow. Public STUN may not work on every network; if required, configure TURN server credentials through host secrets. Never place TURN credentials in source control.
