@@ -1,0 +1,31 @@
+name: VisionQuest Python checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  syntax-and-live-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install lightweight test dependencies
+        run: python -m pip install --upgrade pip pytest numpy opencv-python-headless==4.14.0.94
+
+      - name: Compile all Python source
+        run: python -m compileall -q app.py core tests
+
+      - name: Test live OpenCV frame processing and recording
+        run: python -m pytest -q tests/test_cloud_live.py
