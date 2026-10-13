@@ -227,6 +227,9 @@ class LiveMonitorState:
     def finish_analysis(self, observation: dict[str, Any] | None = None, error: str = "") -> None:
         with self.lock:
             self.analysis_busy = False
+            # Measure the cadence from completion, not start, so a slow model
+            # cannot trigger back-to-back inferences when a fragment reruns.
+            self.last_analysis_started = time.monotonic()
             self.latest_analysis_error = error[:500]
             if observation:
                 self.latest_observation = dict(observation)
