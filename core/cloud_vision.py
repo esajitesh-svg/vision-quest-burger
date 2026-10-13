@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
+import logging
 import os
 import time
 
@@ -78,19 +79,26 @@ def _cpu_count() -> int:
 
 @lru_cache(maxsize=1)
 def _load_model():
-    """Load model once per process; caching avoids repeated model downloads/loads."""
+    """Load one cached, reduced-memory CPU model instance."""
     import torch
     from transformers import AutoModelForVision2Seq, AutoProcessor
 
-    torch.set_num_threads(min(2, _cpu_count()))
+    # Keep the CPU pool small on shared cloud hosts and load 16-bit weights
+    # directly from safetensors to avoid a full FP32 model copy in RAM.
+    torch.set_num_threads(1)
+    logging.getLogger(__name__).info(
+        "VisionQuest: loading %s with bfloat16 CPU weights; image analysis is starting.",
+        MODEL_ID,
+    )
     processor = AutoProcessor.from_pretrained(MODEL_ID)
     model = AutoModelForVision2Seq.from_pretrained(
         MODEL_ID,
-        torch_dtype=torch.float32,
+        torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
         attn_implementation="eager",
     )
     model.eval()
+    logging.getLogger(__name__).info("VisionQuest: vision model loaded successfully.")
     return processor, model
 
 
@@ -120,7 +128,7 @@ def analyze_image(
     started = time.perf_counter()
     with torch.inference_mode():
         generated_ids = model.generate(
-            **inputs, max_new_tokens=96, do_sample=False, num_beams=1
+            **inputs, max_new_tokens=48, do_sample=False, num_beams=1, use_cache=False
         )
     new_tokens = generated_ids[:, inputs["input_ids"].shape[1]:]
     answer = processor.batch_decode(new_tokens, skip_special_tokens=True)[0].strip()
