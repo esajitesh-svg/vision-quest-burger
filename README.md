@@ -2,13 +2,14 @@
 
 The primary **LIVE HUD** workspace opens on the live camera panel with a short animated VisionQuest boot splash. The interface uses a dark, cyan-accented command-console style. Live mode supports automatic interval sampling and **Analyze Current Frame Now** for immediate scene, object/location, visible-text, short-description, or custom-question analysis. A browser speech button can pronounce the latest observation.
 
-This is a **cloud-deployment edition** of the VisionQuest demo. Unlike the local Ollama build, it runs the small public vision model `HuggingFaceTB/SmolVLM-256M-Instruct` on the hosting server using Transformers. Users can open a hosted HTTPS URL from a phone, tablet, or computer.
+This is a **cloud-deployment edition** of VisionQuest. The Streamlit app does not load PyTorch/Transformers locally (which can exceed Streamlit Community Cloud's memory limit); instead it sends sampled images to a hosted Hugging Face Inference Provider using `Qwen/Qwen2.5-VL-3B-Instruct:fastest`. Users can open the HTTPS URL from a phone, tablet, or computer.
 
 ## Important differences from the local edition
 
 - Still photos use browser camera capture (`st.camera_input`) or image upload. The **Live camera & recording** tab uses WebRTC to stream the visitor's camera to the cloud server; OpenCV processes frames on the server. It does not use `cv2.VideoCapture(0)` to access a remote visitor's webcam.
 - Live mode offers periodic AI analysis (15, 30, or 60 seconds) and silent MP4 recording (maximum 60 seconds or 25 MB). The user must explicitly start and stop the stream/recording. A recording is held temporarily for download; it is not a permanent server-side archive.
 - WebRTC requires HTTPS and network access to STUN/TURN. The app configures a public STUN server by default. If a device/network cannot connect, configure `TURN_SERVER_URL`, `TURN_USERNAME`, and `TURN_CREDENTIAL` in Streamlit Secrets with credentials from a TURN provider. Audio is not recorded.
+- Add both `APP_PASSWORD` and `HF_TOKEN` in Streamlit's Secrets. `HF_TOKEN` must have Inference Providers permission. Keep all tokens out of the source and repository. The hosted inference provider may consume your Hugging Face monthly credits and can be subject to rate limits or paid usage; check the current pricing/usage page before using it.
 - The demo vault is a single shared SQLite database on the app host and is protected by one app password. Anyone with that password can see and export the same demo records.
 - The default Streamlit Community Cloud filesystem should not be treated as durable storage. A restart/redeploy can cause database loss. Do not store real medical or sensitive personal information. Use fictional demo records only.
 - This is a prototype, not a medical device or validated dementia-support system.
