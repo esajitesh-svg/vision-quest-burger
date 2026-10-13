@@ -21,6 +21,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from core.cloud_db import init_db, list_people, list_memories, save_person, save_memory, search_memories, export_memories_csv
 from core.cloud_vision import MODE_LABELS, analyze_image, model_status, prepare_image
+from core.cloud_cv import process_image_opencv
 from core.voice import SUPPORTED_LANGUAGES, build_speech_html
 
 ROOT = Path(__file__).resolve().parent
@@ -143,15 +144,36 @@ with vision_tab:
             question = st.text_input("Question about the image", max_chars=300, placeholder="What objects are on the table?")
         detail_level = st.select_slider("Image detail", options=["Fast", "Balanced", "Text detail"], value="Fast", help="Cloud CPU inference can take time. Fast is best for an initial test.")
         max_side = {"Fast": 448, "Balanced": 512, "Text detail": 640}[detail_level]
+        use_opencv = st.checkbox(
+            "Use OpenCV image processing", value=True,
+            help="Runs OpenCV on the captured/uploaded image in the cloud: decoding, resizing, lighting/focus estimates, and optional enhancement."
+        )
+        enhance_opencv = st.checkbox(
+            "Enhance contrast and edge detail with OpenCV", value=False,
+            disabled=not use_opencv,
+            help="Optional enhancement can help some images, but may alter fine details. Compare results when reading text."
+        )
         analyze = st.button("✨ Analyze image", type="primary", use_container_width=True, disabled=not bool(image_bytes) or (mode == "visual_question" and not question.strip()))
     with right:
         st.subheader("Visual observation")
         st.markdown("<div class='small-note'>Task-specific prompts ask the model to stay grounded in the image, mention uncertainty, and avoid guessing identities.</div>", unsafe_allow_html=True)
         if analyze and image_bytes:
             try:
-                with st.spinner("Loading the cloud vision model and analyzing the image. The first request may take longer…"):
-                    result = analyze_image(image_bytes, mode=mode, focus=question, max_side=max_side)
-                st.session_state["latest_result"] = {"text": result.text, "mode": mode, "model": result.model, "elapsed": result.elapsed_seconds, "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), "source_hash": hashlib.sha256(image_bytes).hexdigest()}
+                with st.spinner("Processing with OpenCV and analyzing the image. The first cloud model load may take longer…"):
+                    model_image_bytes = image_bytes
+                    cv_metrics = None
+                    if use_opencv:
+                        model_image_bytes, cv_metrics = process_image_opencv(
+                            image_bytes, max_side=max_side, enhance=enhance_opencv
+                        )
+                    result = analyze_image(model_image_bytes, mode=mode, focus=question, max_side=max_side)
+                st.session_state["latest_result"] = {
+                    "text": result.text, "mode": mode, "model": result.model,
+                    "elapsed": result.elapsed_seconds,
+                    "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+                    "source_hash": hashlib.sha256(image_bytes).hexdigest(),
+                    "opencv_enabled": bool(use_opencv), "opencv_metrics": cv_metrics,
+                }
                 st.success(f"Analysis completed in {result.elapsed_seconds:.1f} seconds · {result.model}")
             except Exception as exc:
                 st.error(f"Vision analysis failed: {exc}")
@@ -162,6 +184,16 @@ with vision_tab:
         if latest and latest_matches_current:
             st.markdown(f"<div class='result'>{escape(latest['text'])}</div>", unsafe_allow_html=True)
             st.caption(f"{latest['mode']} · {latest['model']} · {latest['timestamp']}")
+            if latest.get("opencv_enabled") and latest.get("opencv_metrics"):
+                cvm = latest["opencv_metrics"]
+                st.markdown("**OpenCV preprocessing report**")
+                cv1, cv2c, cv3 = st.columns(3)
+                cv1.metric("Brightness", f"{cvm['brightness']}/255", cvm["brightness_label"])
+                cv2c.metric("Focus detail", f"{cvm['sharpness_score']}", cvm["sharpness_label"])
+                cv3.metric("Processed image", f"{cvm['processed_width']} × {cvm['processed_height']}")
+                st.caption(f"OpenCV resized {cvm['original_width']} × {cvm['original_height']} to {cvm['processed_width']} × {cvm['processed_height']}; output JPEG {cvm['output_bytes']:,} bytes. Focus score is a rough heuristic, not a guarantee of image quality.")
+            elif latest.get("opencv_enabled"):
+                st.caption("OpenCV ran, but no preprocessing metrics were returned.")
             st.components.v1.html(
                 build_speech_html(
                     latest["text"],
@@ -331,7 +363,8 @@ with settings_tab:
     ready, status_message = model_status()
     st.write(f"**Vision engine:** {status_message}")
     st.write("**Model:** HuggingFaceTB/SmolVLM-256M-Instruct")
-    st.write("**Camera:** Browser-based still capture; server-side OpenCV webcam access is intentionally disabled in cloud mode.")
+    st.write("**OpenCV:** Headless OpenCV image-processing module is enabled for captured/uploaded frames.")
+    st.write("**Camera:** Browser-based still capture or image upload. OpenCV runs on the cloud server to decode/resize images, estimate brightness and focus detail, and optionally enhance contrast before vision inference. It does not directly open a visitor’s webcam or provide continuous live video in this cloud edition.")
     st.write("**Voice:** Browser-native speech synthesis reads observations and manually selected memory notes aloud; no external TTS API key is required.")
     st.write("**Memory storage:** Shared SQLite demo database on the host. Its filesystem may reset on redeploy/restart; backups and durable production database setup are not included.")
     st.write("**Privacy:** Image bytes are processed on the hosting server and are not intentionally saved as image files. Memory notes are stored on the host. The app uses one shared password, not individual user accounts.")
