@@ -13,15 +13,18 @@ from html import escape
 import hmac
 import io
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
+import av
 import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
+from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
 from core.cloud_db import init_db, list_people, list_memories, save_person, save_memory, search_memories, export_memories_csv
 from core.cloud_vision import MODE_LABELS, analyze_image, model_status, prepare_image
 from core.cloud_cv import process_image_opencv
+from core.cloud_live import LiveMonitorState, process_live_frame
 from core.voice import SUPPORTED_LANGUAGES, build_speech_html
 
 ROOT = Path(__file__).resolve().parent
@@ -104,6 +107,9 @@ if not password_gate():
     st.stop()
 
 init_db()
+if "live_monitor_state" not in st.session_state:
+    st.session_state["live_monitor_state"] = LiveMonitorState()
+live_state: LiveMonitorState = st.session_state["live_monitor_state"]
 
 with st.container():
     st.markdown("<div class='hero'><div class='kicker'>SMRITI AI · CLOUD EDITION</div><h1>VisionQuest</h1><p>A vision-first assistant for describing what a camera or image shows, with manually curated memory notes. The AI reports visual observations; it does not identify people or diagnose conditions.</p><span class='pill'>☁️ Hosted AI · HTTPS camera input</span><span class='pill'>🔊 Voice companion</span><span class='pill'>🌐 Available across devices</span></div>", unsafe_allow_html=True)
@@ -123,9 +129,229 @@ with vision_tab:
     left, right = st.columns([1.05, .95], gap="large")
     with left:
         st.subheader("Give VisionQuest an image")
-        source_tab, upload_tab = st.tabs(["📸 Use this device's camera", "📁 Upload image"])
+        source_tab, live_tab, upload_tab = st.tabs(["📸 Capture photo", "🎥 Live camera & recording", "📁 Upload image"])
         with source_tab:
-            camera_image = st.camera_input("Capture a photo", key="cloud_camera_input", help="Your browser requests camera permission. Works on the deployed HTTPS site on phones, tablets, and computers.")
+            camera_image = st.camera_input("Capture a photo", key="cloud_camera_input", help="Capture one still image in this device's browser over HTTPS.")
+        with live_tab:
+            st.subheader("Live webcam monitor")
+            st.write("Start the camera stream below. OpenCV processes each incoming frame on the cloud server; the vision model can analyze a still frame at the interval you choose.")
+            st.warning("Live video is sent to the cloud server while streaming. Recording is silent video only, limited to 60 seconds and 25 MB, and is offered for download after you stop. Use consented, fictional test scenes.")
+            live_auto_analyze = st.checkbox("Enable periodic AI analysis", value=True, key="live_auto_analyze")
+            live_interval = st.select_slider("Analyze a frame every", options=[15, 30, 60], value=30, key="live_interval_seconds", format_func=lambda x: f"{x} seconds")
+            live_mode_label = st.selectbox("Live analysis task", options=list(MODE_LABELS.values()), index=0, key="live_mode_label")
+            live_mode = next(k for k, v in MODE_LABELS.items() if v == live_mode_label)
+            live_question = ""
+            if live_mode == "visual_question":
+                live_question = st.text_input("Question about each sampled frame", max_chars=300, key="live_visual_question", placeholder="What objects are visible?")
+            live_detail = st.selectbox("AI frame size", options=["Fast · 384 px", "Balanced · 512 px"], index=0, key="live_detail")
+            live_max_side = 384 if live_detail.startswith("Fast") else 512
+            live_enhance = st.checkbox("Apply OpenCV contrast enhancement", value=False, key="live_opencv_enhance")
+            recording_seconds = st.select_slider("Maximum clip duration", options=[15, 30, 60], value=30, key="live_record_seconds", format_func=lambda x: f"{x} seconds")
+            st.caption("For WebRTC, this site must be HTTPS and may need network access to STUN/TURN servers. Video recording has no audio.")
+
+            rtc_configuration = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+            turn_url = get_secret("TURN_SERVER_URL")
+            turn_username = get_secret("TURN_USERNAME")
+            turn_credential = get_secret("TURN_CREDENTIAL")
+            if turn_url and turn_username and turn_credential:
+                rtc_configuration["iceServers"].append({
+                    "urls": [part.strip() for part in turn_url.split(",") if part.strip()],
+                    "username": turn_username,
+                    "credential": turn_credential,
+                })
+
+            def on_live_video_frame(frame):
+                try:
+                    frame_bgr = frame.to_ndarray(format="bgr24")
+                    processed_bgr, jpeg_bytes, metrics = process_live_frame(
+                        frame_bgr, max_side=640, enhance=live_enhance
+                    )
+                    live_state.update_frame(processed_bgr, jpeg_bytes, metrics)
+                    return av.VideoFrame.from_ndarray(processed_bgr, format="bgr24")
+                except Exception as exc:
+                    live_state.finish_analysis(error=f"OpenCV frame processing error: {type(exc).__name__}: {exc}")
+                    return frame
+
+            try:
+                live_ctx = webrtc_streamer(
+                    key="visionquest-live-camera",
+                    mode=WebRtcMode.SENDRECV,
+                    video_frame_callback=on_live_video_frame,
+                    rtc_configuration=rtc_configuration,
+                    media_stream_constraints={
+                        "video": {
+                            "width": {"ideal": 640},
+                            "height": {"ideal": 360},
+                            "frameRate": {"ideal": 10, "max": 12},
+                        },
+                        "audio": False,
+                    },
+                    async_processing=True,
+                    on_video_ended=live_state.close,
+                )
+            except Exception as exc:
+                live_ctx = None
+                st.error(f"Live camera component could not start: {type(exc).__name__}: {exc}")
+                st.info("Try refreshing the page, allowing camera permission, or checking whether your network permits WebRTC.")
+
+            if live_ctx is not None:
+                @st.fragment(run_every="1s")
+                def live_monitor_panel():
+                    snapshot_jpeg, frame_metrics, frame_count, last_frame_time = live_state.snapshot()
+                    is_playing = bool(live_ctx.state.playing)
+
+                    if is_playing and live_auto_analyze:
+                        sample = live_state.take_analysis_sample(live_interval)
+                        if sample is not None:
+                            try:
+                                with st.spinner("Analyzing the latest live frame…"):
+                                    result = analyze_image(
+                                        sample,
+                                        mode=live_mode,
+                                        focus=live_question,
+                                        max_side=live_max_side,
+                                    )
+                                observation = {
+                                    "text": result.text,
+                                    "mode": live_mode,
+                                    "model": result.model,
+                                    "elapsed": result.elapsed_seconds,
+                                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                                    "sequence": int(datetime.now(timezone.utc).timestamp() * 1000),
+                                    "source_hash": hashlib.sha256(sample).hexdigest(),
+                                }
+                                live_state.finish_analysis(observation=observation)
+                                st.session_state["latest_result"] = {
+                                    "text": result.text,
+                                    "mode": f"Live · {live_mode}",
+                                    "model": result.model,
+                                    "elapsed": result.elapsed_seconds,
+                                    "timestamp": observation["timestamp"],
+                                    "source_hash": observation["source_hash"],
+                                    "origin": "live",
+                                }
+                                st.rerun(scope="app")
+                            except Exception as exc:
+                                live_state.finish_analysis(error=f"{type(exc).__name__}: {exc}")
+
+                    current_status = live_state.get_status()
+                    if not is_playing:
+                        st.info("Live monitor is idle. Click START in the camera player above and allow browser camera permission.")
+                    elif frame_count:
+                        st.success(f"Live stream active · {frame_count:,} frames received")
+                    else:
+                        st.info("Waiting for the first camera frame…")
+
+                    if snapshot_jpeg:
+                        with st.expander("Latest OpenCV-processed frame", expanded=False):
+                            preview_image = Image.open(io.BytesIO(snapshot_jpeg))
+                            st.image(preview_image, use_container_width=True)
+
+                    if frame_metrics:
+                        metric_cols = st.columns(3)
+                        metric_cols[0].metric("OpenCV brightness", f"{frame_metrics['brightness']}/255", frame_metrics["brightness_label"])
+                        metric_cols[1].metric("Focus detail", f"{frame_metrics['sharpness']}", frame_metrics["sharpness_label"])
+                        metric_cols[2].metric("Frame", f"{frame_metrics['width']} × {frame_metrics['height']}")
+                        st.caption(f"Latest frame JPEG: {frame_metrics['jpeg_bytes']:,} bytes. Focus is a rough heuristic, not a diagnosis of image quality.")
+
+                    if current_status["latest_analysis_error"]:
+                        st.error(f"Live processing/analysis notice: {current_status['latest_analysis_error']}")
+                    elif current_status["analysis_busy"]:
+                        st.info("AI analysis is in progress. Additional frames are skipped until it finishes.")
+
+                    record_col, stop_col = st.columns(2)
+                    with record_col:
+                        if st.button(
+                            "⏺ Start MP4 recording",
+                            type="primary",
+                            use_container_width=True,
+                            disabled=(not is_playing or current_status["recording"]),
+                            key="start_live_recording",
+                        ):
+                            try:
+                                live_state.start_recording(recording_seconds)
+                                st.rerun(scope="app")
+                            except Exception as exc:
+                                st.error(f"Could not start recording: {exc}")
+                    with stop_col:
+                        if st.button(
+                            "■ Stop & finalize recording",
+                            use_container_width=True,
+                            disabled=not current_status["recording"],
+                            key="stop_live_recording",
+                        ):
+                            live_state.stop_recording("Recording stopped by user.")
+                            st.rerun(scope="app")
+
+                    current_status = live_state.get_status()
+                    if current_status["recording"]:
+                        st.warning(
+                            f"Recording silent MP4 · {current_status['recording_duration']:.1f}/"
+                            f"{current_status['recording_limit']} seconds · "
+                            f"{current_status['video_frame_count']} frames"
+                        )
+                    elif current_status["recording_notice"]:
+                        st.caption(current_status["recording_notice"])
+
+                    clip_bytes, clip_name = live_state.get_completed_video()
+                    if clip_bytes:
+                        st.download_button(
+                            "⬇️ Download recorded video (MP4)",
+                            data=clip_bytes,
+                            file_name=clip_name,
+                            mime="video/mp4",
+                            use_container_width=True,
+                            key="download_live_mp4",
+                        )
+                        if st.button("Clear temporary recording", key="clear_live_mp4"):
+                            live_state.clear_completed_video()
+                            st.rerun(scope="app")
+
+                    observation = current_status["latest_observation"]
+                    if observation:
+                        st.subheader("Latest live AI observation")
+                        st.markdown(f"<div class='result'>{escape(observation['text'])}</div>", unsafe_allow_html=True)
+                        st.caption(
+                            f"{observation['mode']} · {observation['model']} · "
+                            f"{observation['elapsed']:.1f}s · {observation['timestamp']}"
+                        )
+                        if st.button("Load observation into Voice tab", key="live_to_voice"):
+                            st.session_state["voice_text"] = observation["text"]
+                            st.rerun(scope="app")
+
+                        current_people = list_people()
+                        if current_people:
+                            names = {p["id"]: f'{p["name"]} — {p["relationship"]}' for p in current_people}
+                            with st.form(f"save_live_observation_{observation['sequence']}"):
+                                selected_person = st.selectbox(
+                                    "Manually choose a person for this reviewed note",
+                                    options=list(names),
+                                    format_func=lambda p_id: names[p_id],
+                                    key=f"live_person_{observation['sequence']}",
+                                )
+                                reviewed_text = st.text_area(
+                                    "Review or edit before saving",
+                                    value=observation["text"],
+                                    max_chars=4000,
+                                    height=100,
+                                    key=f"live_note_{observation['sequence']}",
+                                )
+                                save_live_note = st.form_submit_button("Save reviewed live observation")
+                                if save_live_note:
+                                    try:
+                                        save_memory(
+                                            selected_person,
+                                            reviewed_text,
+                                            f"Live OpenCV observation ({observation['mode']}); model: {observation['model']}",
+                                        )
+                                        st.success("Reviewed note saved to the selected person's demo memory.")
+                                        st.rerun(scope="app")
+                                    except Exception as exc:
+                                        st.error(str(exc))
+                        else:
+                            st.caption("Add a fictional person in the People tab before saving a live observation.")
+
+                live_monitor_panel()
         with upload_tab:
             uploaded_image = st.file_uploader("Choose a JPG, PNG, or WEBP image", type=["jpg", "jpeg", "png", "webp"], key="cloud_upload_input")
         file_obj = camera_image if camera_image is not None else uploaded_image
@@ -364,7 +590,7 @@ with settings_tab:
     st.write(f"**Vision engine:** {status_message}")
     st.write("**Model:** HuggingFaceTB/SmolVLM-256M-Instruct")
     st.write("**OpenCV:** Headless OpenCV image-processing module is enabled for captured/uploaded frames.")
-    st.write("**Camera:** Browser-based still capture or image upload. OpenCV runs on the cloud server to decode/resize images, estimate brightness and focus detail, and optionally enhance contrast before vision inference. It does not directly open a visitor’s webcam or provide continuous live video in this cloud edition.")
+    st.write("**Camera:** Browser still capture plus WebRTC live stream. OpenCV processes each incoming frame on the cloud host. The Live camera & recording tab supports periodic AI analysis and download of silent MP4 clips up to 60 seconds/25 MB; WebRTC depends on camera permissions and STUN/TURN network access.")
     st.write("**Voice:** Browser-native speech synthesis reads observations and manually selected memory notes aloud; no external TTS API key is required.")
     st.write("**Memory storage:** Shared SQLite demo database on the host. Its filesystem may reset on redeploy/restart; backups and durable production database setup are not included.")
     st.write("**Privacy:** Image bytes are processed on the hosting server and are not intentionally saved as image files. Memory notes are stored on the host. The app uses one shared password, not individual user accounts.")
