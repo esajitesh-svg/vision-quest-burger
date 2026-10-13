@@ -167,8 +167,15 @@ memories = list_memories(limit=500)
 m1, m2, m3 = st.columns(3)
 m1.metric("Saved people", len(people))
 m2.metric("Memory notes", len(memories))
-m3.metric("Vision model", "Ready to load" if status[0] else "Setup issue")
-st.caption("Online demo: image processing and model inference happen on the hosting server. Uploaded/captured images are not written to disk by this app, but the hosting service processes the bytes. Use only fictional demo data until security and storage are production-ready.")
+m3.metric("Vision model", "Remote endpoint ready" if status[0] else "Needs HF_TOKEN")
+if status[0]:
+    st.success(status[1])
+else:
+    st.warning(status[1])
+st.caption(
+    "Privacy notice: the live stream is processed on the app host, and sampled/analyzed frames or uploaded photos are sent to the configured external vision inference provider. "
+    "The app does not intentionally save source photos, but the provider processes the image request. Use fictional test scenes and obtain consent; do not upload private medical or sensitive imagery."
+)
 
 vision_tab, people_tab, memory_tab, voice_tab, search_tab, settings_tab = st.tabs(["⚡ LIVE HUD", "👤 People", "🧠 Memories", "🔊 Voice", "🔎 Search", "⚙️ System"])
 
@@ -179,7 +186,7 @@ with vision_tab:
         st.markdown("<div class='hud-label'>Primary visual interface // live sensing</div><div class='hud-rule'></div>", unsafe_allow_html=True)
         st.subheader("LIVE OPTICAL FEED")
         st.write("Browser camera → WebRTC stream → OpenCV frame processing → sampled vision analysis. Use Analyze Now for an immediate answer or enable periodic sampling.")
-        st.warning("Live video is sent to the cloud while streaming. Recordings contain silent video only, are limited to 60 seconds / 25 MB, and are offered as a download after stopping. Use consented test scenes.")
+        st.warning("Live video is streamed to the app host. Frames sent for AI analysis are forwarded to an external inference provider. Recording is silent video only, limited to 60 seconds / 25 MB, and downloadable after stopping. Use consented fictional scenes only.")
         live_auto_analyze = st.checkbox("Enable periodic AI analysis", value=False, key="live_auto_analyze", help="For a safer first test on limited cloud memory, begin with automatic analysis off. Click ANALYZE CURRENT FRAME NOW first; enable periodic sampling after one successful result.")
         live_interval = st.select_slider("Analyze a frame every", options=[15, 30, 60], value=30, key="live_interval_seconds", format_func=lambda x: f"{x} seconds")
         live_mode_label = st.selectbox("Live analysis task", options=list(MODE_LABELS.values()), index=0, key="live_mode_label")
