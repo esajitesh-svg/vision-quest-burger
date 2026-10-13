@@ -73,3 +73,21 @@ def test_live_analysis_reserves_one_frame_at_a_time():
     status = state.get_status()
     assert status["analysis_busy"] is False
     assert status["latest_observation"]["text"] == "A test observation"
+
+def test_manual_analysis_can_bypass_periodic_interval():
+    state = LiveMonitorState()
+    frame, encoded, metrics = process_live_frame(_test_frame())
+    state.update_frame(frame, encoded, metrics)
+
+    first = state.take_analysis_sample(60)
+    assert first == encoded
+    state.finish_analysis(observation={"text": "first result"})
+
+    # Normal periodic sampling should wait, but a manual analyze button can force a sample.
+    assert state.take_analysis_sample(60) is None
+    forced = state.take_analysis_sample(60, force=True)
+    assert forced == encoded
+    # It must still avoid overlapping inference attempts.
+    assert state.take_analysis_sample(60, force=True) is None
+    state.finish_analysis(observation={"text": "manual result"})
+
