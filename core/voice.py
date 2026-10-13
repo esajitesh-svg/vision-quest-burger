@@ -66,15 +66,15 @@ def build_speech_html(
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 :root {{ color-scheme: light; font-family: system-ui, -apple-system, Segoe UI, sans-serif; }}
-body {{ margin:0; padding:4px 2px 6px; background:transparent; color:#26314e; }}
+body {{ margin:0; padding:4px 2px 6px; background:transparent; color:#b9d8e1; }}
 .controls {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
-button {{ border:1px solid #d7ddef; border-radius:10px; padding:9px 13px; min-height:39px; cursor:pointer; font-weight:650; font-size:14px; }}
-#speak {{ background:#594bd6; color:#fff; border-color:#594bd6; }}
-#stop {{ background:#fff; color:#26314e; }}
-button:focus-visible,input:focus-visible {{ outline:3px solid #9389ff; outline-offset:2px; }}
-.rate {{ font-size:12px; color:#52617d; display:flex; align-items:center; gap:6px; }}
-input[type=range] {{ width:95px; accent-color:#594bd6; }}
-#status {{ margin:6px 2px 0; font-size:12px; color:#596780; min-height:16px; }}
+button {{ border:1px solid #234653; border-radius:5px; padding:9px 13px; min-height:39px; cursor:pointer; font-weight:750; font-size:14px; letter-spacing:.025em; }}
+#speak {{ background:#00cfe8; color:#031015; border-color:#42edff; }}
+#stop {{ background:#0b1b25; color:#c5d9e3; }}
+button:focus-visible,input:focus-visible {{ outline:3px solid #33e7fa; outline-offset:2px; }}
+.rate {{ font-size:12px; color:#86a7b6; display:flex; align-items:center; gap:6px; }}
+input[type=range] {{ width:95px; accent-color:#00cfe8; }}
+#status {{ margin:6px 2px 0; font-size:12px; color:#82acb8; min-height:16px; }}
 </style></head>
 <body>
 <div class="controls" aria-label="Voice controls">
