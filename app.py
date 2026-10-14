@@ -876,38 +876,66 @@ with vision_tab:
                 live_voice_state.set_streaming(bool(is_playing and live_voice_enabled))
                 voice_snapshot = live_voice_state.snapshot()
 
-                # Keep the player HTML stable across the one-second fragment refreshes.
-                # It is rebuilt only when a new reply/narration arrives; the browser iframe
-                # keeps speaking and also retains its visible replay/stop controls.
-                previous_reply_sequence = int(
-                    st.session_state.get("live_jarvis_seen_reply_sequence", 0)
-                )
-                reply_is_new = voice_snapshot["reply_sequence"] > previous_reply_sequence
                 latest_observation = current_status.get("latest_observation")
-                previous_observation_sequence = int(
-                    st.session_state.get("live_jarvis_seen_observation_sequence", 0)
-                )
                 observation_sequence = (
                     int(latest_observation.get("sequence", 0))
                     if latest_observation else 0
                 )
 
+                # Persist each completed natural-language observation once, when the
+                # user has enabled long-term text memory. Never save every video frame.
+                previous_logged_sequence = int(
+                    st.session_state.get("live_jarvis_saved_observation_sequence", 0)
+                )
+                if observation_sequence > previous_logged_sequence and latest_observation:
+                    st.session_state["live_jarvis_saved_observation_sequence"] = observation_sequence
+                    observation_text = str(latest_observation.get("text", "")).strip()
+                    if live_auto_save_observations and observation_text:
+                        detection_status_for_memory = live_state.detection_snapshot()
+                        detection_age_for_memory = detection_status_for_memory.get("age_seconds")
+                        if isinstance(detection_age_for_memory, (int, float)) and detection_age_for_memory <= 2.5:
+                            labels = [
+                                str(item.get("label", "")).strip()
+                                for item in detection_status_for_memory.get("detections", [])[:12]
+                                if str(item.get("label", "")).strip()
+                            ]
+                            if labels:
+                                observation_text += "\nRecent object detector labels (may be incomplete): " + ", ".join(labels)
+                        try:
+                            save_observation(
+                                observation_text,
+                                source="Live camera",
+                                model=str(latest_observation.get("model", "")),
+                                observed_at=str(latest_observation.get("timestamp", "")),
+                                frame_hash=str(latest_observation.get("source_hash", "")),
+                            )
+                        except Exception as exc:
+                            st.warning(
+                                "The scene was analyzed, but its long-term log entry could not be saved: "
+                                + f"{type(exc).__name__}: {exc}"
+                            )
+
+                # Build a single browser-native speech queue for both replies and
+                # camera narration. It stays inside this one stable component, avoiding
+                # the fresh-iframe autoplay problem of rebuilding HTML audio players.
+                previous_reply_sequence = int(
+                    st.session_state.get("live_jarvis_seen_reply_sequence", 0)
+                )
+                reply_is_new = voice_snapshot["reply_sequence"] > previous_reply_sequence
+                previous_observation_sequence = int(
+                    st.session_state.get("live_jarvis_seen_observation_sequence", 0)
+                )
+
                 if live_voice_enabled and reply_is_new:
                     st.session_state["live_jarvis_seen_reply_sequence"] = voice_snapshot["reply_sequence"]
-                    speech_text = voice_snapshot["latest_reply"]
-                    speech_language = st.session_state.get("voice_language", "en-IN")
-                    speech_rate = float(st.session_state.get("voice_rate", 0.92))
-                    st.session_state["live_jarvis_speech_html"] = build_speech_html(
-                        speech_text,
-                        language=speech_language,
-                        rate=speech_rate,
-                        widget_label="🔊 REPLAY JARVIS REPLY",
-                        autoplay=True,
-                    )
-                    st.session_state["live_jarvis_speech_kind"] = "reply"
-                    st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
-                    # Leave newer camera observations queued; the reply takes priority
-                    # now, and any pending narration may speak after the cooldown.
+                    speech_text = str(voice_snapshot["latest_reply"]).strip()
+                    if speech_text:
+                        st.session_state["live_jarvis_browser_speech_text"] = speech_text
+                        st.session_state["live_jarvis_browser_speech_kind"] = "reply"
+                        st.session_state["live_jarvis_browser_speech_sequence"] = int(
+                            st.session_state.get("live_jarvis_browser_speech_sequence", 0)
+                        ) + 1
+                        st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
                 elif (
                     live_voice_enabled
                     and live_voice_narrate_scenes
@@ -918,30 +946,54 @@ with vision_tab:
                         assistant_processing=bool(voice_snapshot["processing"]),
                         last_spoken_at=float(st.session_state.get("live_jarvis_last_spoken_at", 0.0)),
                         now=time.monotonic(),
+                        cooldown_seconds=2.0,
                     )
                 ):
                     narration_text = str(latest_observation.get("text", "")).strip()
                     if not narration_text:
-                        # Empty observations have nothing useful to speak; consume them
-                        # to avoid retrying the same empty result on each UI refresh.
                         st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
                     else:
-                        try:
-                            speech_language = st.session_state.get("voice_language", "en-IN")
-                            speech_rate = float(st.session_state.get("voice_rate", 0.92))
-                            st.session_state["live_jarvis_speech_html"] = build_speech_html(
-                                narration_text,
-                                language=speech_language,
-                                rate=speech_rate,
-                                widget_label="🔊 REPLAY CAMERA DESCRIPTION",
-                                autoplay=True,
-                            )
-                            st.session_state["live_jarvis_speech_kind"] = "camera narration"
-                            st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
-                            # Consume the observation only after the speech is prepared.
-                            st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
-                        except ValueError:
-                            st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
+                        st.session_state["live_jarvis_browser_speech_text"] = narration_text
+                        st.session_state["live_jarvis_browser_speech_kind"] = "camera narration"
+                        st.session_state["live_jarvis_browser_speech_sequence"] = int(
+                            st.session_state.get("live_jarvis_browser_speech_sequence", 0)
+                        ) + 1
+                        st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
+                        st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
+
+                # SpeechRecognition runs in the browser after a clear user gesture.
+                # This removes the extra Whisper network hop from the live conversation
+                # path; the AI reply still depends on the hosted model and internet.
+                if live_voice_enabled:
+                    voice_event = browser_voice_component(
+                        enabled=bool(is_playing and live_voice_enabled and status[0]),
+                        busy=bool(voice_snapshot["processing"]),
+                        language=st.session_state.get("voice_language", "en-IN"),
+                        rate=float(st.session_state.get("voice_rate", 0.92)),
+                        speech_text=st.session_state.get("live_jarvis_browser_speech_text", ""),
+                        speech_sequence=int(st.session_state.get("live_jarvis_browser_speech_sequence", 0)),
+                        last_transcript=voice_snapshot.get("latest_transcript", ""),
+                        key="smriti_live_browser_voice",
+                        default=None,
+                    )
+                    if isinstance(voice_event, dict) and voice_event.get("event") == "transcript":
+                        event_id = str(voice_event.get("event_id", ""))
+                        transcript = str(voice_event.get("transcript", "")).strip()
+                        previous_event_id = st.session_state.get("live_jarvis_last_browser_event_id", "")
+                        if event_id and event_id != previous_event_id and transcript:
+                            st.session_state["live_jarvis_last_browser_event_id"] = event_id
+                            if live_voice_state.begin_processing():
+                                try:
+                                    Thread(
+                                        target=run_live_voice_text_worker,
+                                        args=(live_voice_state, live_state, transcript),
+                                        daemon=True,
+                                    ).start()
+                                except Exception as exc:
+                                    live_voice_state.fail_turn(
+                                        f"Could not start reply worker: {type(exc).__name__}: {exc}"
+                                    )
+                voice_snapshot = live_voice_state.snapshot()
 
                 if not is_playing:
                     st.info("Live monitor is idle. Click START in the camera player above and allow browser camera permission.")
@@ -951,22 +1003,13 @@ with vision_tab:
                     st.info("Waiting for the first camera frame…")
 
                 if live_voice_enabled:
-                    audio_age = voice_snapshot.get("audio_age_seconds")
-                    audio_recent = (
-                        isinstance(audio_age, (int, float)) and audio_age <= 3.0
-                    )
-                    if is_playing and audio_recent:
-                        st.success("🎙️ LIVE JARVIS MICROPHONE CONNECTED · speak naturally, then pause briefly for a reply")
-                    elif is_playing:
-                        st.warning(
-                            "Camera is running, but no recent microphone frames reached the server. "
-                            "Check browser microphone permission, then STOP and START the camera again."
-                        )
+                    if is_playing:
+                        st.success("🎙 LIVE JARVIS READY · activate listening in the voice panel above, then speak naturally")
                     else:
-                        st.warning("LIVE JARVIS is enabled in settings. STOP/START the camera and approve microphone permission.")
+                        st.warning("Start the camera first, then activate the browser voice panel. Press STOP in the voice panel to end listening.")
                     st.caption(f"Voice status: {voice_snapshot['status']}")
                     if voice_snapshot["error"]:
-                        st.warning(f"Voice assistant: {voice_snapshot['error']}")
+                        st.warning(f"Smriti notice: {voice_snapshot['error']}")
                     if voice_snapshot["latest_transcript"]:
                         st.markdown(f"**You:** {escape(voice_snapshot['latest_transcript'])}")
                     if voice_snapshot["latest_reply"]:
@@ -975,18 +1018,15 @@ with vision_tab:
                             unsafe_allow_html=True,
                         )
                         if voice_snapshot["used_live_camera"]:
-                            st.caption("This reply used a recent live camera frame.")
-                    speech_html = st.session_state.get("live_jarvis_speech_html", "")
-                    if speech_html:
-                        st.components.v1.html(speech_html, height=100, scrolling=False)
+                            st.caption("This reply used a fresh live camera frame.")
                     if live_voice_narrate_scenes:
                         st.caption(
-                            f"Camera narration is on · new scene descriptions target every {live_interval} seconds. "
-                            "Actual timing depends on cloud inference and network latency."
+                            f"Camera narration is enabled · target interval {live_interval} seconds. "
+                            "The cloud vision model can take longer than the target interval."
                         )
                     st.caption(
-                        "Voice clips are assembled in memory and submitted after about 0.75 seconds of silence. "
-                        "The microphone remains active until you stop the WebRTC session."
+                        "Voice transcripts and replies are stored in the Activity Log while live JARVIS is enabled. "
+                        "Raw microphone audio and continuous video are not stored by this feature."
                     )
 
                 if snapshot_jpeg:
