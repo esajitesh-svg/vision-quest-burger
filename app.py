@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import av
+import cv2
 import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
@@ -24,7 +25,7 @@ from streamlit_webrtc import WebRtcMode, webrtc_streamer
 from core.cloud_db import init_db, list_people, list_memories, save_person, save_memory, search_memories, export_memories_csv
 from core.cloud_vision import MODE_LABELS, analyze_image, model_status, prepare_image
 from core.cloud_cv import process_image_opencv
-from core.cloud_live import LiveMonitorState, process_live_frame
+from core.cloud_live import LiveMonitorState, process_live_frame, render_cv_view
 from core.voice import SUPPORTED_LANGUAGES, build_speech_html
 
 ROOT = Path(__file__).resolve().parent
@@ -70,6 +71,23 @@ a { color:#46eaff !important; }
 [data-testid="stTabs"] [aria-selected="true"] { color:#5eecff !important; border-bottom-color:#00d8f2 !important; }
 .result { padding:1rem 1.15rem; border:1px solid #214d5a; border-left:3px solid #00d7ef; background:#07151c; border-radius:6px; color:#d1eef5; line-height:1.65; white-space:pre-wrap; box-shadow:inset 0 0 20px rgba(0,190,225,.035); }
 .small-note { font-size:.86rem; color:#86a7b6 !important; }
+.workspace-masthead { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:1rem; padding:1rem 1.2rem; margin:.15rem 0 .8rem; background:linear-gradient(110deg,#03080c,#071820 65%,#071019); border:1px solid #1c5665; border-left:3px solid #32eaff; box-shadow:inset 0 0 24px rgba(0,216,239,.035); }
+.workspace-brand { display:flex; gap:.9rem; align-items:center; min-width:250px; }
+.workspace-glyph { width:48px; height:48px; display:flex; align-items:center; justify-content:center; border:1px solid #2c93a5; color:#5ef3ff; font-size:1.8rem; background:radial-gradient(circle,#12313b,#061116); box-shadow:0 0 20px rgba(0,223,247,.1); }
+.workspace-kicker { color:#50e7f8 !important; font:700 .66rem/1.4 monospace; letter-spacing:.2em; }
+.workspace-title { font:800 clamp(1.15rem,2.3vw,1.9rem)/1.15 monospace; color:#e1fbff !important; letter-spacing:.05em; margin:.15rem 0 .3rem; }
+.workspace-subtitle { color:#7799a8 !important; font:.75rem/1.5 monospace; letter-spacing:.06em; margin:0; }
+.workspace-node { display:flex; flex-wrap:wrap; gap:.45rem; }
+.workspace-node span { border:1px solid #204450; background:#07131a; padding:.55rem .7rem; font:700 .65rem monospace; letter-spacing:.06em; color:#79bdc9; }
+.workspace-node b { color:#53f2bd; font-weight:800; }
+.workspace-readouts { display:flex; flex-wrap:wrap; gap:1.2rem; padding:.45rem .75rem; margin-bottom:.9rem; border-bottom:1px solid #153a45; background:rgba(6,19,26,.7); font: .7rem monospace; letter-spacing:.08em; color:#5da2b1; }
+.workspace-readouts b { color:#d5faff; margin-left:.35rem; }
+.cv-workbench-label { padding:.45rem .6rem; margin:.3rem 0 .65rem; border-left:2px solid #39e6f8; background:linear-gradient(90deg,rgba(0,196,220,.09),transparent); color:#69e9f8 !important; font:700 .7rem monospace; letter-spacing:.15em; }
+.cv-feed-heading { color:#67edf8 !important; font:700 .76rem monospace; letter-spacing:.16em; border-bottom:1px solid #174552; padding-bottom:.55rem; margin:.8rem 0 .45rem; }
+div[data-testid="stMetric"] { box-shadow:inset 0 0 18px rgba(0,220,240,.025); }
+[data-testid="stTabs"] [data-baseweb="tab"] { font-family:monospace; font-size:.72rem; letter-spacing:.04em; }
+[data-testid="stTabs"] [aria-selected="true"] { background:linear-gradient(180deg,rgba(0,216,239,.1),transparent); }
+[data-testid="stVerticalBlockBorderWrapper"] { border-radius:3px !important; }
 .hud-label { color:#59eaff !important; font-size:.74rem; font-weight:800; letter-spacing:.15em; text-transform:uppercase; }
 .hud-rule { height:1px; width:100%; background:linear-gradient(90deg,#00d7ef,rgba(0,215,239,.1),transparent); margin:.55rem 0 1rem; }
 @keyframes vqSpin { to { transform:rotate(360deg); } }
@@ -158,16 +176,26 @@ if "live_monitor_state" not in st.session_state:
     st.session_state["live_monitor_state"] = LiveMonitorState()
 live_state: LiveMonitorState = st.session_state["live_monitor_state"]
 
-with st.container():
-    st.markdown("<div class='hero'><div class='kicker'>SMRITI AI · CLOUD EDITION</div><h1>VisionQuest</h1><p>A vision-first assistant for describing what a camera or image shows, with manually curated memory notes. The AI reports visual observations; it does not identify people or diagnose conditions.</p><span class='pill'>☁️ Hosted AI · HTTPS camera input</span><span class='pill'>🔊 Voice companion</span><span class='pill'>🌐 Available across devices</span></div>", unsafe_allow_html=True)
-
 status = model_status()
 people = list_people()
 memories = list_memories(limit=500)
-m1, m2, m3 = st.columns(3)
-m1.metric("Saved people", len(people))
-m2.metric("Memory notes", len(memories))
-m3.metric("Vision model", "Remote endpoint ready" if status[0] else "Needs HF_TOKEN")
+
+st.markdown(
+    "<div class='workspace-masthead'>"
+    "<div class='workspace-brand'><div class='workspace-glyph'>⌗</div>"
+    "<div><div class='workspace-kicker'>SMRITI AI // VISION SYSTEMS</div>"
+    "<div class='workspace-title'>VISIONQUEST · CV WORKSPACE</div>"
+    "<p class='workspace-subtitle'>LIVE FRAME PIPELINE / PIXEL ANALYSIS / VISUAL MEMORY INTERFACE</p></div></div>"
+    "<div class='workspace-node'><span>CV ENGINE <b>OPENCV</b></span><span>INPUT <b>DEVICE CAMERA</b></span>"
+    "<span>INFERENCE <b>REMOTE AI</b></span></div></div>",
+    unsafe_allow_html=True,
+)
+st.markdown(
+    f"<div class='workspace-readouts'><span>PERSON NODES <b>{len(people):03d}</b></span>"
+    f"<span>MEMORY FRAGMENTS <b>{len(memories):03d}</b></span>"
+    f"<span>WORKSPACE <b>LIVE / INTERACTIVE</b></span></div>",
+    unsafe_allow_html=True,
+)
 if status[0]:
     st.success(status[1])
 else:
@@ -177,15 +205,14 @@ st.caption(
     "The app does not intentionally save source photos, but the provider processes the image request. Use fictional test scenes and obtain consent; do not upload private medical or sensitive imagery."
 )
 
-vision_tab, people_tab, memory_tab, voice_tab, search_tab, settings_tab = st.tabs(["⚡ LIVE HUD", "👤 People", "🧠 Memories", "🔊 Voice", "🔎 Search", "⚙️ System"])
+vision_tab, people_tab, memory_tab, voice_tab, search_tab, settings_tab = st.tabs(["◉ CV WORKSPACE", "PERSON NODES", "MEMORY INDEX", "VOICE I/O", "QUERY", "RUNTIME"])
 
 with vision_tab:
     live_tab, image_lab_tab = st.tabs(["🎥 LIVE SENSING // WEBCAM", "📸 IMAGE LAB"])
 
     with live_tab:
-        st.markdown("<div class='hud-label'>Primary visual interface // live sensing</div><div class='hud-rule'></div>", unsafe_allow_html=True)
-        st.subheader("LIVE OPTICAL FEED")
-        st.write("OpenCV processes every incoming camera frame continuously. Auto-observe is set to request AI analysis every second, describing the scene, visible objects and approximate positions, activities, and readable text. If a remote AI request takes longer than a second, the app waits for it to finish before sending the next one.")
+        st.markdown("<div class='cv-workbench-label'>01 / LIVE SENSOR INPUT · WEBCAM</div><div class='cv-feed-heading'>LIVE OPTICAL FEED // REAL-TIME CV PIPELINE</div>", unsafe_allow_html=True)
+        st.write("This is the computer-vision workspace: the OpenCV display pipeline runs on every live frame. Switch between the color HUD, grayscale, Canny edges, contour mapping, adaptive thresholding, and HSV saturation views. The AI analyzer receives the color frame separately, so diagnostic views do not replace the image used for scene descriptions.")
         st.warning("Live video is streamed to the app host. Frames sent for AI analysis are forwarded to an external inference provider. Recording is silent video only, limited to 60 seconds / 25 MB, and downloadable after stopping. Use consented fictional scenes only.")
         live_auto_analyze = st.checkbox("Enable always-on AI auto-observation", value=bool(status[0]), disabled=not status[0], key="live_auto_observe_always", help="When the camera is streaming and the remote model is configured, analyze frames automatically at the selected interval. This sends sampled images to an external AI provider.")
         live_opencv_always = st.checkbox("Keep OpenCV processing active on every live frame", value=True, key="live_opencv_always", help="OpenCV runs continuously on each incoming frame while the webcam stream is active. Turn this off only for troubleshooting.")
@@ -197,9 +224,24 @@ with vision_tab:
             live_question = st.text_input("Question about each sampled frame", max_chars=300, key="live_visual_question", placeholder="What objects are visible?")
         live_detail = st.selectbox("AI frame size", options=["Fast · 384 px", "Balanced · 512 px"], index=0, key="live_detail")
         live_max_side = 384 if live_detail.startswith("Fast") else 512
-        live_enhance = st.checkbox("Apply OpenCV contrast enhancement", value=False, key="live_opencv_enhance")
+
+        st.markdown("<div class='cv-workbench-label'>02 / DISPLAY PIPELINE · OPENCV OPERATORS</div>", unsafe_allow_html=True)
+        pipe_mode_col, pipe_low_col, pipe_high_col = st.columns([1.5, 1, 1], gap="small")
+        with pipe_mode_col:
+            live_view_mode = st.selectbox(
+                "CV display operator",
+                options=["COLOR + HUD", "GRAYSCALE", "CANNY EDGE MAP", "CONTOUR MAP", "ADAPTIVE THRESHOLD", "HSV SATURATION"],
+                index=0,
+                key="live_cv_display_mode",
+                help="Changes the live visual canvas. The AI still receives the color analysis frame.",
+            )
+        with pipe_low_col:
+            canny_low = st.slider("Canny low", min_value=0, max_value=200, value=55, step=5, key="live_canny_low")
+        with pipe_high_col:
+            canny_high = st.slider("Canny high", min_value=20, max_value=255, value=140, step=5, key="live_canny_high")
+        live_enhance = st.checkbox("Apply OpenCV contrast enhancement to the AI input frame", value=False, key="live_opencv_enhance")
         recording_seconds = st.select_slider("Maximum clip duration", options=[15, 30, 60], value=30, key="live_record_seconds", format_func=lambda x: f"{x} seconds")
-        st.caption("For WebRTC, this site must be HTTPS and may need network access to STUN/TURN servers. Video recording has no audio.")
+        st.caption("The display operator transforms only the live canvas; AI samples the separate color frame. Recordings capture the visible CV display. Camera access requires HTTPS and network support for WebRTC.")
 
         rtc_configuration = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
         turn_url = get_secret("TURN_SERVER_URL")
@@ -216,29 +258,40 @@ with vision_tab:
             try:
                 frame_bgr = frame.to_ndarray(format="bgr24")
                 if live_opencv_always:
-                    # Full OpenCV path runs for each frame received while streaming.
-                    processed_bgr, jpeg_bytes, metrics = process_live_frame(
+                    # Keep a color frame for AI; render a separate diagnostic frame for the browser.
+                    processed_bgr, analysis_jpeg, metrics = process_live_frame(
                         frame_bgr, max_side=640, enhance=live_enhance
                     )
+                    display_bgr = render_cv_view(
+                        processed_bgr,
+                        mode=live_view_mode,
+                        canny_low=canny_low,
+                        canny_high=canny_high,
+                        frame_count=live_state.frame_count + 1,
+                    )
+                    ok, display_encoded = cv2.imencode(
+                        ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 82]
+                    )
+                    display_jpeg = display_encoded.tobytes() if ok else analysis_jpeg
                 else:
-                    # Troubleshooting fallback: preserve a frame for preview/AI without
-                    # running the OpenCV metric/enhancement path.
+                    # Troubleshooting fallback: preserve an unmodified camera frame.
                     height, width = frame_bgr.shape[:2]
                     fallback_buffer = io.BytesIO()
                     Image.fromarray(frame_bgr[:, :, ::-1]).save(
                         fallback_buffer, format="JPEG", quality=82
                     )
-                    jpeg_bytes = fallback_buffer.getvalue()
-                    processed_bgr = frame_bgr
+                    analysis_jpeg = fallback_buffer.getvalue()
+                    display_jpeg = analysis_jpeg
+                    display_bgr = frame_bgr
                     metrics = {
                         "width": width, "height": height,
                         "brightness": None, "sharpness": None,
                         "brightness_label": "OpenCV off",
                         "sharpness_label": "OpenCV off",
-                        "jpeg_bytes": len(jpeg_bytes),
+                        "jpeg_bytes": len(display_jpeg),
                     }
-                live_state.update_frame(processed_bgr, jpeg_bytes, metrics)
-                return av.VideoFrame.from_ndarray(processed_bgr, format="bgr24")
+                live_state.update_frame(display_bgr, display_jpeg, metrics, analysis_jpeg=analysis_jpeg)
+                return av.VideoFrame.from_ndarray(display_bgr, format="bgr24")
             except Exception as exc:
                 live_state.finish_analysis(error=f"OpenCV frame processing error: {type(exc).__name__}: {exc}")
                 return frame
