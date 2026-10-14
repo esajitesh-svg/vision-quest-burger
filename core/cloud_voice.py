@@ -95,13 +95,38 @@ def answer_voice_query(
     if not token:
         raise RuntimeError("Voice replies need HF_TOKEN in the app's Streamlit Secrets.")
 
-    observation_context: dict[str, str] | None = None
+    observation_context: dict[str, Any] | None = None
     if latest_observation:
         observation_context = {
             "observed_at": str(latest_observation.get("timestamp", ""))[:80],
             "task": str(latest_observation.get("mode", ""))[:80],
             "observation": str(latest_observation.get("text", ""))[:1800],
         }
+        # The on-device/server-side object detector is intentionally a small
+        # vocabulary detector; pass its recent labels as supporting evidence,
+        # not as a complete inventory of everything visible.
+        detector_labels = []
+        for item in (latest_observation.get("object_detections") or [])[:12]:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label", "")).strip()[:48]
+            try:
+                confidence = max(0.0, min(1.0, float(item.get("confidence", 0.0))))
+            except (TypeError, ValueError):
+                confidence = 0.0
+            if label:
+                detector_labels.append({
+                    "label": label,
+                    "confidence": round(confidence, 2),
+                })
+        if detector_labels:
+            observation_context["recent_local_object_detections"] = detector_labels
+            observation_context["object_detection_age_seconds"] = latest_observation.get(
+                "object_detection_age_seconds"
+            )
+            observation_context["object_detection_model"] = str(
+                latest_observation.get("object_detection_model", "")
+            )[:100]
     memory_context = []
     for item in (memories or [])[:10]:
         memory_context.append({
@@ -121,59 +146,51 @@ def answer_voice_query(
         "recent_saved_memory_notes": memory_context,
         "recent_conversation_turns": recent_turns,
     }
+    user_text = (
+        "Context data (may be empty):\n"
+        + json.dumps(context, ensure_ascii=False)
+        + "\n\nSpoken question: "
+        + question
+        + (
+            "\n\nA fresh camera frame from the live camera is attached. Base answers about the current scene on this image. "
+            "You may use the recent observation and local detector labels as supporting evidence."
+            if live_image_bytes else
+            "\n\nNo fresh camera frame is attached. Use the latest cached visual observation only as prior evidence, "
+            "not as proof that the scene is unchanged."
+        )
+    )
+    user_content: str | list[dict[str, Any]] = user_text
+    if live_image_bytes:
+        user_content = [
+            {"type": "text", "text": user_text},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/jpeg;base64,"
+                    + base64.b64encode(live_image_bytes).decode("ascii")
+                },
+            },
+        ]
+
     messages = [
         {
             "role": "system",
             "content": (
                 "You are Smriti AI, a calm, friendly voice companion. Reply in the user's language, "
-                "using 1–4 short spoken sentences. When a live camera image is included, use its visible "
-                "evidence for questions about what is happening now. Use the latest_visual_observation "
-                "as a fallback when no live image is included. For personal-history questions, use only "
-                "the supplied saved memory notes and conversation context. Never invent memories, identify "
-                "a person from the camera, diagnose a condition, or claim certainty the evidence does not "
-                "support. If the context does not contain the answer, say you do not have that information "
-                "yet and suggest what note could be saved. General greetings and simple general questions "
-                "are okay. Do not claim to have saved anything unless the app confirms it."
+                "using 1–4 short spoken sentences. For questions about what is happening now, what you can "
+                "see, or what you just observed, ground the answer in the attached fresh camera frame when "
+                "one is supplied. Cross-check it with the latest_visual_observation and recent_local_object_detections "
+                "when present. The detector labels are supporting hints only, not a complete inventory; the "
+                "image is the main visual evidence. If no fresh image is attached, answer from the saved "
+                "observation only and be clear when that observation may not describe the current scene. "
+                "For personal-history questions, use only supplied saved memory notes and conversation context. "
+                "Never invent observations or memories, identify a person from the camera, diagnose a condition, "
+                "or claim certainty the evidence does not support. If the context does not contain the answer, "
+                "say you do not have that information yet. General greetings and simple general questions are "
+                "okay. Do not claim to have saved anything unless the app confirms it."
             ),
         },
-        {
-            "role": "user",
-            "content": (
-                [
-                    {
-                        "type": "text",
-                        "text": (
-                            "Context data (may be empty):\n"
-                            + json.dumps(context, ensure_ascii=False)
-                            + "\n\nSpoken question: "
-                            + question
-                            + (
-                                "\n\nA fresh frame from the live camera is attached. Use it for "
-                                "questions about the current view; do not guess identities."
-                                if live_image_bytes else ""
-                            )
-                        ),
-                    }
-                ]
-                + (
-                    [{
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "data:image/jpeg;base64,"
-                            + base64.b64encode(live_image_bytes).decode("ascii")
-                        },
-                    }]
-                    if live_image_bytes else []
-                )
-                if live_image_bytes
-                else (
-                    "Context data (may be empty):\n"
-                    + json.dumps(context, ensure_ascii=False)
-                    + "\n\nSpoken question: "
-                    + question
-                )
-            ),
-        },
+        {"role": "user", "content": user_content},
     ]
     started = time.perf_counter()
     try:

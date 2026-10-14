@@ -34,7 +34,7 @@ from core.cloud_cv import process_image_opencv
 from core.cloud_live import LiveMonitorState, process_live_frame, draw_detection_overlay
 from core.voice import SUPPORTED_LANGUAGES, build_speech_html
 from core.cloud_voice import transcribe_audio, answer_voice_query
-from core.live_voice import LiveVoiceAssistantState, pcm16_to_wav
+from core.live_voice import LiveVoiceAssistantState, pcm16_to_wav, should_narrate_observation
 
 ROOT = Path(__file__).resolve().parent
 
@@ -189,10 +189,39 @@ def run_live_voice_worker(voice_state, live_state, pcm_clip: bytes) -> None:
             image_bytes = live_state.get_latest_analysis_jpeg(max_side=512)
 
         live_status = live_state.get_status()
+        # Pair the fresh camera frame with recent local detections and the latest
+        # natural-language observation. This lets voice answers ground themselves
+        # in both the visible frame and the actual detector output, not memory alone.
+        voice_observation = dict(live_status.get("latest_observation") or {})
+        detection_status = live_state.detection_snapshot()
+        detection_age = detection_status.get("age_seconds")
+        detections_are_recent = (
+            isinstance(detection_age, (int, float)) and detection_age <= 5.0
+        )
+        if detections_are_recent:
+            compact_detections = []
+            for item in detection_status.get("detections", [])[:12]:
+                try:
+                    label = str(item.get("label", "")).strip()[:48]
+                    score = max(0.0, min(1.0, float(item.get("score", 0.0))))
+                except (TypeError, ValueError):
+                    continue
+                if label:
+                    compact_detections.append({
+                        "label": label,
+                        "confidence": round(score, 2),
+                    })
+            voice_observation["object_detections"] = compact_detections
+            voice_observation["object_detection_age_seconds"] = round(float(detection_age), 1)
+            voice_observation["object_detection_model"] = str(detection_status.get("model", ""))[:100]
+            voice_observation.setdefault("mode", "live_camera")
+        # Give the assistant the notes most relevant to this utterance rather than
+        # the ten newest notes, which may belong to a completely different topic.
+        relevant_memories = search_memories(transcript, limit=10)
         reply = answer_voice_query(
             transcript,
-            latest_observation=live_status.get("latest_observation"),
-            memories=list_memories(limit=10),
+            latest_observation=voice_observation or None,
+            memories=relevant_memories,
             conversation_history=voice_state.history_snapshot(),
             live_image_bytes=image_bytes,
         )
@@ -292,30 +321,7 @@ div[data-testid="stMetric"] { box-shadow:inset 0 0 18px rgba(0,220,240,.025); }
 """
 st.markdown(CSS, unsafe_allow_html=True)
 
-# One-time cinematic boot splash per browser session.
-if not st.session_state.get("vq_intro_shown", False):
-    import time as _intro_time
-    splash = st.empty()
-    splash.markdown(
-        """
-        <div class="vq-splash">
-          <div class="vq-orbit"></div>
-          <div class="vq-splash-core">
-            <div class="vq-ring"></div><div class="vq-ring inner"></div>
-            <div style="font-size:2rem;line-height:1;margin-bottom:.4rem;">◉</div>
-            <div class="vq-splash-title">VISIONQUEST</div>
-            <div class="vq-splash-sub" style="margin-top:.45rem;">Visual memory system</div>
-          </div>
-          <div class="vq-splash-sub">Initializing perception interface</div>
-          <div class="vq-splash-line"></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    _intro_time.sleep(2.4)
-    splash.empty()
-    st.session_state["vq_intro_shown"] = True
-
+# Keep startup non-blocking: the live workspace should render immediately.
 
 def get_secret(name: str) -> str:
     value = os.getenv(name, "").strip()
@@ -901,21 +907,26 @@ with vision_tab:
                     )
                     st.session_state["live_jarvis_speech_kind"] = "reply"
                     st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
-                    if observation_sequence:
-                        st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
+                    # Leave newer camera observations queued; the reply takes priority
+                    # now, and any pending narration may speak after the cooldown.
                 elif (
                     live_voice_enabled
                     and live_voice_narrate_scenes
                     and latest_observation
-                    and observation_sequence > previous_observation_sequence
+                    and should_narrate_observation(
+                        observation_sequence=observation_sequence,
+                        seen_sequence=previous_observation_sequence,
+                        assistant_processing=bool(voice_snapshot["processing"]),
+                        last_spoken_at=float(st.session_state.get("live_jarvis_last_spoken_at", 0.0)),
+                        now=time.monotonic(),
+                    )
                 ):
-                    st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
-                    last_spoken_at = float(st.session_state.get("live_jarvis_last_spoken_at", 0.0))
-                    # User-directed answers have priority; do not repeatedly interrupt the
-                    # current narration with another scene summary.
-                    narration_cooldown = time.monotonic() - last_spoken_at < 8.0
-                    if not voice_snapshot["processing"] and not narration_cooldown:
-                        narration_text = latest_observation.get("text", "")
+                    narration_text = str(latest_observation.get("text", "")).strip()
+                    if not narration_text:
+                        # Empty observations have nothing useful to speak; consume them
+                        # to avoid retrying the same empty result on each UI refresh.
+                        st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
+                    else:
                         try:
                             speech_language = st.session_state.get("voice_language", "en-IN")
                             speech_rate = float(st.session_state.get("voice_rate", 0.92))
@@ -928,8 +939,10 @@ with vision_tab:
                             )
                             st.session_state["live_jarvis_speech_kind"] = "camera narration"
                             st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
+                            # Consume the observation only after the speech is prepared.
+                            st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
                         except ValueError:
-                            pass
+                            st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
 
                 if not is_playing:
                     st.info("Live monitor is idle. Click START in the camera player above and allow browser camera permission.")

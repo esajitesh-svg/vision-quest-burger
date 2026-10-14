@@ -21,6 +21,33 @@ MAX_UTTERANCE_SECONDS = 12.0
 ENERGY_THRESHOLD = 420.0
 
 
+def should_narrate_observation(
+    observation_sequence: int,
+    seen_sequence: int,
+    assistant_processing: bool,
+    last_spoken_at: float,
+    now: float,
+    cooldown_seconds: float = 8.0,
+) -> bool:
+    """Return whether a new observation can be spoken without interrupting a reply.
+
+    A false result must not consume the observation sequence: it remains pending
+    and can be narrated once the assistant is idle and the cooldown has elapsed.
+    """
+    try:
+        observation_sequence = int(observation_sequence)
+        seen_sequence = int(seen_sequence)
+        cooldown_seconds = max(0.0, float(cooldown_seconds))
+        elapsed_since_speech = float(now) - float(last_spoken_at)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return (
+        observation_sequence > seen_sequence
+        and not assistant_processing
+        and elapsed_since_speech >= cooldown_seconds
+    )
+
+
 class LiveVoiceAssistantState:
     """Collect one utterance at a time from the WebRTC audio callback."""
 

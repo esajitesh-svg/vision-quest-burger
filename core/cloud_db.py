@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -105,16 +106,55 @@ def list_memories(limit: int = 500) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+_MEMORY_QUERY_STOPWORDS = {
+    "a", "an", "and", "are", "about", "am", "any", "at", "be", "been",
+    "can", "did", "do", "does", "for", "from", "had", "has", "have", "i",
+    "in", "is", "it", "me", "my", "of", "on", "or", "please", "tell",
+    "that", "the", "this", "to", "was", "were", "what", "when", "where",
+    "which", "who", "why", "with", "you", "your", "remember", "recall",
+    "smriti", "memory", "memories",
+}
+
+
 def search_memories(query: str, limit: int = 100) -> list[dict]:
+    """Rank saved notes by meaningful query-token overlap, not only exact phrases.
+
+    This is a lightweight local retrieval method (not semantic/embedding search).
+    Person labels receive extra weight so questions like "what do I know about
+    my aunt?" can find notes even when the sentence is phrased differently.
+    """
     needle = (query or "").strip().casefold()
     if not needle:
         return []
-    return [
-        row for row in list_memories(limit=1000)
-        if needle in " ".join(
-            str(row.get(k, "")) for k in ("person_name", "relationship", "note", "source")
+
+    tokens = {
+        token for token in re.findall(r"[\w]+", needle, flags=re.UNICODE)
+        if len(token) > 1 and token not in _MEMORY_QUERY_STOPWORDS
+    }
+    rows = list_memories(limit=1000)
+    ranked: list[tuple[int, int, dict]] = []
+    for index, row in enumerate(rows):
+        person_text = " ".join(
+            str(row.get(key, "")) for key in ("person_name", "relationship")
         ).casefold()
-    ][:max(1, min(int(limit), 500))]
+        note_text = " ".join(
+            str(row.get(key, "")) for key in ("note", "source")
+        ).casefold()
+        searchable = person_text + " " + note_text
+        score = 5 if needle in searchable else 0
+        for token in tokens:
+            # Count both the person-label match and the note-content match. A
+            # note that names the person and answers the query should outrank an
+            # unrelated note attached to that same person.
+            if token in person_text:
+                score += 3
+            if token in note_text:
+                score += 1
+        if score:
+            ranked.append((score, index, row))
+
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [row for _, _, row in ranked[:max(1, min(int(limit), 500))]]
 
 
 def export_memories_csv() -> bytes:

@@ -57,7 +57,13 @@ def test_voice_reply_uses_scene_and_memory_context(monkeypatch):
     monkeypatch.setattr(voice.requests, "post", fake_post)
     result = voice.answer_voice_query(
         "Where are the keys now?",
-        latest_observation={"text": "A set of keys was visible on a desk.", "timestamp": "now"},
+        latest_observation={
+            "text": "A set of keys was visible on a desk.",
+            "timestamp": "now",
+            "object_detections": [{"label": "book", "confidence": 0.94}],
+            "object_detection_age_seconds": 0.8,
+            "object_detection_model": "unit-test-detector",
+        },
         memories=[{"person_name": "Demo", "relationship": "test profile", "note": "Keys usually stay on the desk."}],
         conversation_history=[{"question": "What was I asking about?", "reply": "You asked about your keys."}],
         live_image_bytes=b"fake-jpeg-bytes",
@@ -73,6 +79,10 @@ def test_voice_reply_uses_scene_and_memory_context(monkeypatch):
     assert "A set of keys was visible on a desk." in text_part
     assert "Keys usually stay on the desk." in text_part
     assert "You asked about your keys." in text_part
+    assert "recent_local_object_detections" in text_part
+    assert "unit-test-detector" in text_part
+    assert "book" in text_part
+    assert "fresh camera frame" in text_part
     assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
@@ -83,3 +93,27 @@ def test_voice_reply_rejects_empty_question():
         assert "empty" in str(exc)
     else:
         raise AssertionError("Expected empty-question error")
+
+
+
+def test_voice_reply_without_fresh_frame_marks_observation_as_cached(monkeypatch):
+    calls = {}
+
+    def fake_post(url, headers, json, timeout):
+        calls["payload"] = json
+        return FakeResponse(200, {
+            "choices": [{"message": {"content": "The most recent observation mentioned a mug."}}]
+        })
+
+    monkeypatch.setattr(voice, "get_hf_token", lambda: "hf-test-token")
+    monkeypatch.setattr(voice.requests, "post", fake_post)
+    result = voice.answer_voice_query(
+        "What did you just observe?",
+        latest_observation={"text": "A mug was visible near the center.", "timestamp": "earlier"},
+    )
+
+    assert result == "The most recent observation mentioned a mug."
+    user_content = calls["payload"]["messages"][1]["content"]
+    assert isinstance(user_content, str)
+    assert "No fresh camera frame is attached" in user_content
+    assert "A mug was visible near the center." in user_content

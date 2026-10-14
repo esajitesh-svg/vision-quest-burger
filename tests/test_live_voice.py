@@ -7,7 +7,7 @@ from io import BytesIO
 
 import numpy as np
 
-from core.live_voice import LiveVoiceAssistantState, pcm16_to_wav
+from core.live_voice import LiveVoiceAssistantState, pcm16_to_wav, should_narrate_observation
 
 
 def _tone(samples=320, amplitude=3000):
@@ -76,3 +76,40 @@ def test_pcm16_to_wav_rejects_empty_and_misaligned_payload():
             pass
         else:
             raise AssertionError("Expected a validation error")
+
+
+
+def test_observation_narration_stays_pending_while_busy_or_in_cooldown():
+    args = {
+        "observation_sequence": 7,
+        "seen_sequence": 6,
+        "assistant_processing": True,
+        "last_spoken_at": 100.0,
+        "now": 120.0,
+        "cooldown_seconds": 8.0,
+    }
+    assert should_narrate_observation(**args) is False
+
+    args["assistant_processing"] = False
+    args["now"] = 107.9
+    assert should_narrate_observation(**args) is False
+
+    args["now"] = 108.0
+    assert should_narrate_observation(**args) is True
+
+
+def test_observation_narration_skips_already_seen_and_invalid_sequence():
+    assert should_narrate_observation(
+        observation_sequence=4,
+        seen_sequence=4,
+        assistant_processing=False,
+        last_spoken_at=0.0,
+        now=100.0,
+    ) is False
+    assert should_narrate_observation(
+        observation_sequence="bad",
+        seen_sequence=0,
+        assistant_processing=False,
+        last_spoken_at=0.0,
+        now=100.0,
+    ) is False
