@@ -1036,6 +1036,7 @@ with vision_tab:
                         language=st.session_state.get("voice_language", "en-IN"),
                         rate=float(st.session_state.get("voice_rate", 0.92)),
                         speech_text=st.session_state.get("live_jarvis_browser_speech_text", ""),
+                        answer_text=voice_snapshot.get("latest_reply", ""),
                         speech_sequence=int(st.session_state.get("live_jarvis_browser_speech_sequence", 0)),
                         speech_kind=st.session_state.get("live_jarvis_browser_speech_kind", "reply"),
                         last_transcript=voice_snapshot.get("latest_transcript", ""),
