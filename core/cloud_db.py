@@ -310,6 +310,11 @@ def get_person_portrait(person_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+def delete_person_portrait(person_id: int) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM person_portraits WHERE person_id=?", (int(person_id),))
+
+
 def search_activity_for_voice(query: str, limit: int = 10) -> list[dict]:
     """Retrieve curated notes plus relevant prior conversations and observations."""
     value = (query or "").strip()
