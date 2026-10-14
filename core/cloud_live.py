@@ -45,7 +45,10 @@ def process_live_frame(
             interpolation=cv2.INTER_AREA,
         )
     else:
-        frame = frame_bgr.copy()
+        # All downstream operations are read-only unless they create a new output
+        # (contrast enhancement does). Reuse the incoming 640x360 frame in smooth
+        # mode instead of copying its full pixel buffer on every callback.
+        frame = frame_bgr
 
     brightness = None
     sharpness = None
@@ -277,7 +280,9 @@ class LiveMonitorState:
         """Called from WebRTC's video callback thread. Do not call Streamlit here."""
         now = time.monotonic()
         with self.lock:
-            self.latest_frame = frame_bgr.copy()
+            # Frame arrays are immutable after update_frame is called; retaining a
+            # reference avoids another full-frame copy on every WebRTC callback.
+            self.latest_frame = frame_bgr
             if jpeg_bytes:
                 self.latest_jpeg = bytes(jpeg_bytes)
             # Hold the clean BGR frame for AI analysis and encode it only when a
