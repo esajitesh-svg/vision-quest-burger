@@ -85,8 +85,8 @@ class LiveVoiceAssistantState:
                 self._speech_active = True
                 self._speech_started_at = now
                 self._last_voice_at = now
+                # The current chunk is already present in the pre-roll buffer.
                 self._buffer = bytearray(self._pre_roll)
-                self._buffer.extend(raw)
                 self._voiced_samples = int(pcm.size)
                 self._status = "Speech detected — listening for the end of your sentence"
                 return None
