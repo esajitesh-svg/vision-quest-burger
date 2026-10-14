@@ -18,6 +18,7 @@ from core.face_recognition import (
 from core.voice import build_speech_html
 from core.demo_mode import render_demo_hub
 from core.local_archive import get_archive_dir, archive_event, save_media, write_text_export
+from core.observer_context import latest_observation_context
 
 st.set_page_config(page_title="Smriti AI",page_icon="✦",layout="wide",initial_sidebar_state="collapsed")
 
@@ -321,7 +322,7 @@ defaults={
  "opencv_detection_last_run":0.0,"opencv_detection_error":"",
  "opencv_detection_elapsed":0.0,"opencv_frame_counter":0,"opencv_detector_backend":"Not loaded",
  "observer_last_run_monotonic":0.0,
- "observer_state":ObserverState()
+ "observer_state":ObserverState(),"answer_error":""
 }
 for k,v in defaults.items():
  if k not in st.session_state: st.session_state[k]=v
@@ -660,6 +661,8 @@ with b:
  for t in st.session_state.chat[-4:]:
   st.markdown("**YOU**"); st.write(t["q"]); st.markdown("**SMRITI**"); st.markdown(f'<div class="reply">{html.escape(t["a"])}</div>',unsafe_allow_html=True)
  st.markdown('</div>',unsafe_allow_html=True)
+if st.session_state.get("answer_error"):
+ st.error("Last answer error: " + str(st.session_state.answer_error))
 
 if send or voice_question:
  try:
@@ -680,14 +683,16 @@ if send or voice_question:
       memories=search_activity_for_voice(transcript,limit=8)
      except Exception:
       memories=[]
-     observation_text = st.session_state.analysis
-     latest = None if observation_text.startswith("DEMO SAMPLE") else {"text":observation_text,"timestamp":st.session_state.analysis_time,"mode":"auto_observe"}
+     with st.session_state.observer_state.lock:
+      observation_text = st.session_state.observer_state.text
+      observation_time = st.session_state.observer_state.time_label
+     latest = latest_observation_context(observation_text, observation_time)
      visual_terms = ("see", "look", "camera", "in front of me", "around me", "what is that", "what's that", "what is this", "what's this", "describe this", "describe what", "read this", "read the", "who is in front")
      needs_live_image = any(term in transcript.casefold() for term in visual_terms)
      # Avoid running a vision-model pass for ordinary chat; use image bytes only for visual questions.
      reply=ask_granite(transcript,latest_observation=latest,memories=memories,conversation_history=[{"question":x["q"],"reply":x["a"]} for x in st.session_state.chat[-4:]],image_bytes=live if needs_live_image else None)
    st.session_state.chat.append({"q":transcript,"a":reply}); st.session_state.chat=st.session_state.chat[-12:]; st.session_state.status="DEMO REPLY READY" if mode == "DEMO MODE" else "REPLY READY"
-   st.session_state.last_transcript=transcript; st.session_state.speech_text=reply; st.session_state.speech_seq+=1
+   st.session_state.last_transcript=transcript; st.session_state.speech_text=reply; st.session_state.speech_seq+=1; st.session_state.answer_error=""
    if mode == "LIVE MODE" and st.session_state.get("archive_auto_save", True):
     try: save_conversation_turn(transcript,reply,source="Simple Smriti",used_live_camera=live is not None)
     except Exception: pass
@@ -702,7 +707,17 @@ if send or voice_question:
     except Exception as archive_exc:
      st.warning(f"Conversation reply succeeded, but local archive failed: {type(archive_exc).__name__}: {archive_exc}")
    st.rerun()
- except Exception as e: st.session_state.status="VOICE / ANSWER ERROR"; st.error(f"Could not complete the conversation: {type(e).__name__}: {e}")
+ except Exception as e:
+  detail=f"{type(e).__name__}: {e}"
+  st.session_state.status="ANSWER ERROR"
+  st.session_state.answer_error=detail
+  fallback_reply="I could not answer that just now. Please check the Local AI Service status and try again."
+  st.session_state.speech_text=fallback_reply
+  st.session_state.speech_seq+=1
+  if "transcript" in locals() and transcript:
+   st.session_state.chat.append({"q":transcript,"a":fallback_reply})
+   st.session_state.chat=st.session_state.chat[-12:]
+  st.rerun()
 if st.session_state.chat:
  with st.expander("🔊 Speak latest reply"):
   st.components.v1.html(build_speech_html(st.session_state.chat[-1]["a"],language="en-IN",rate=.92,widget_label="▶ SPEAK REPLY",autoplay=False),height=100,scrolling=False)
