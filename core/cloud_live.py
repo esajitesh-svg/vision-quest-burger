@@ -156,6 +156,49 @@ def render_cv_view(
     return display
 
 
+def draw_detection_overlay(
+    frame_bgr: np.ndarray,
+    detections: list[dict[str, Any]],
+    age_seconds: float | None = None,
+    max_age_seconds: float = 9.0,
+) -> np.ndarray:
+    """Draw labelled confidence boxes over a live frame while results are fresh."""
+    if not isinstance(frame_bgr, np.ndarray) or frame_bgr.size == 0:
+        raise ValueError("Cannot draw detections on an empty frame.")
+    display = frame_bgr.copy()
+    if age_seconds is not None and age_seconds > max_age_seconds:
+        return display
+
+    height, width = display.shape[:2]
+    color = (90, 245, 160)  # BGR neon green
+    for item in detections[:30]:
+        box = item.get("box", {})
+        try:
+            x1 = max(0, min(width - 1, int(round(float(box["xmin"])))))
+            y1 = max(0, min(height - 1, int(round(float(box["ymin"])))))
+            x2 = max(0, min(width - 1, int(round(float(box["xmax"])))))
+            y2 = max(0, min(height - 1, int(round(float(box["ymax"])))))
+            score = max(0.0, min(1.0, float(item.get("score", 0.0))))
+            label = str(item.get("label", "object"))[:32]
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if x2 <= x1 or y2 <= y1:
+            continue
+        cv2.rectangle(display, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
+        text = f"{label.upper()}  {score:.0%}"
+        (text_width, text_height), baseline = cv2.getTextSize(
+            text, cv2.FONT_HERSHEY_SIMPLEX, 0.43, 1
+        )
+        tag_y = max(33, y1 - text_height - baseline - 7)
+        tag_x2 = min(width - 1, x1 + text_width + 10)
+        cv2.rectangle(display, (x1, tag_y), (tag_x2, tag_y + text_height + baseline + 6), color, -1)
+        cv2.putText(
+            display, text, (x1 + 4, tag_y + text_height + 1),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.43, (3, 14, 18), 1, cv2.LINE_AA
+        )
+    return display
+
+
 class LiveMonitorState:
     """Thread-safe state owned by one Streamlit browser session."""
 
@@ -183,6 +226,15 @@ class LiveMonitorState:
         self.last_analysis_started: float | None = None
         self.latest_observation: dict[str, Any] | None = None
         self.latest_analysis_error = ""
+
+        # Object detection runs independently from the scene-description model.
+        self.detection_busy = False
+        self.last_detection_started: float | None = None
+        self.latest_detections: list[dict[str, Any]] = []
+        self.latest_detection_error = ""
+        self.latest_detection_completed: float | None = None
+        self.latest_detection_elapsed = 0.0
+        self.latest_detection_model = ""
 
     def update_frame(
         self,
@@ -331,6 +383,51 @@ class LiveMonitorState:
             if observation:
                 self.latest_observation = dict(observation)
 
+    def take_detection_sample(self, interval_seconds: int = 3, force: bool = False) -> bytes | None:
+        """Reserve the newest color frame for one remote object-detection request."""
+        now = time.monotonic()
+        with self.lock:
+            if self.detection_busy or not self.latest_analysis_jpeg:
+                return None
+            interval = min(60, max(1, int(interval_seconds)))
+            if not force and self.last_detection_started is not None and now - self.last_detection_started < interval:
+                return None
+            self.detection_busy = True
+            self.last_detection_started = now
+            return bytes(self.latest_analysis_jpeg)
+
+    def finish_detection(
+        self,
+        detections: list[dict[str, Any]] | None = None,
+        model: str = "",
+        elapsed_seconds: float = 0.0,
+        error: str = "",
+    ) -> None:
+        """Publish one detector result from a worker thread."""
+        with self.lock:
+            self.detection_busy = False
+            self.latest_detection_error = error[:500]
+            if detections is not None and not error:
+                self.latest_detections = [dict(item) for item in detections]
+                self.latest_detection_model = str(model)
+                self.latest_detection_elapsed = max(0.0, float(elapsed_seconds))
+                self.latest_detection_completed = time.monotonic()
+
+    def detection_snapshot(self) -> dict[str, Any]:
+        """Get a thread-safe copy of the latest object-detection result."""
+        with self.lock:
+            age = None
+            if self.latest_detection_completed is not None:
+                age = max(0.0, time.monotonic() - self.latest_detection_completed)
+            return {
+                "detections": [dict(item) for item in self.latest_detections],
+                "busy": self.detection_busy,
+                "error": self.latest_detection_error,
+                "age_seconds": age,
+                "elapsed_seconds": self.latest_detection_elapsed,
+                "model": self.latest_detection_model,
+            }
+
     def get_status(self) -> dict[str, Any]:
         with self.lock:
             duration = (time.monotonic() - self.recording_started) if self.recording else 0.0
@@ -345,6 +442,11 @@ class LiveMonitorState:
                 "analysis_busy": self.analysis_busy,
                 "latest_observation": dict(self.latest_observation) if self.latest_observation else None,
                 "latest_analysis_error": self.latest_analysis_error,
+                "detection_busy": self.detection_busy,
+                "latest_detections": [dict(item) for item in self.latest_detections],
+                "latest_detection_error": self.latest_detection_error,
+                "latest_detection_elapsed": self.latest_detection_elapsed,
+                "latest_detection_model": self.latest_detection_model,
                 "frame_count": self.frame_count,
                 "latest_metrics": dict(self.latest_metrics),
             }
