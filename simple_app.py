@@ -218,7 +218,10 @@ if send or voice_question:
       memories=[]
      observation_text = st.session_state.analysis
      latest = None if observation_text.startswith("DEMO SAMPLE") else {"text":observation_text,"timestamp":st.session_state.analysis_time,"mode":"auto_observe"}
-     reply=ask_granite(transcript,latest_observation=latest,memories=memories,conversation_history=[{"question":x["q"],"reply":x["a"]} for x in st.session_state.chat[-4:]],image_bytes=live)
+     visual_terms = ("see", "look", "camera", "in front of me", "around me", "what is that", "what's that", "what is this", "what's this", "describe this", "describe what", "read this", "read the", "who is in front")
+     needs_live_image = any(term in transcript.casefold() for term in visual_terms)
+     # Avoid running a vision-model pass for ordinary chat; use image bytes only for visual questions.
+     reply=ask_granite(transcript,latest_observation=latest,memories=memories,conversation_history=[{"question":x["q"],"reply":x["a"]} for x in st.session_state.chat[-4:]],image_bytes=live if needs_live_image else None)
    st.session_state.chat.append({"q":transcript,"a":reply}); st.session_state.chat=st.session_state.chat[-12:]; st.session_state.status="DEMO REPLY READY" if mode == "DEMO MODE" else "REPLY READY"
    st.session_state.last_transcript=transcript; st.session_state.speech_text=reply; st.session_state.speech_seq+=1
    if mode == "LIVE MODE":
