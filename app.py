@@ -510,15 +510,20 @@ with vision_tab:
             disabled=not status[0],
             help="Saves text descriptions after AI analysis finishes; it does not store continuous video or raw microphone audio. Text from live voice conversations is also logged when live JARVIS is enabled.",
         )
+        live_auto_analyze = st.checkbox(
+            "Enable automatic AI scene analysis",
+            value=True,
+            disabled=not status[0],
+            key="live_auto_analysis_enabled_v2",
+            help="When the camera is running, sends a sampled frame to the vision model and produces a written observation periodically. Turn off to save inference credits; use ANALYZE CURRENT FRAME NOW for a one-shot analysis.",
+        )
+        st.caption(
+            "Automatic analysis is enabled by default. Start the camera and allow a few seconds for the first written observation; "
+            "the provider may take longer on its first request. The analysis status and any provider error appear below the live feed."
+        )
 
         with st.expander("⚙️ PERCEPTION / CAMERA CONTROLS", expanded=False):
-            live_auto_analyze = st.checkbox(
-                "Enable automatic scene explanation",
-                value=False,
-                disabled=not status[0],
-                key="live_auto_observe_smooth",
-                help="Off by default for the smoothest feed. Enable for periodic hosted scene descriptions, or use ANALYZE CURRENT FRAME NOW when needed.",
-            )
+            st.caption("Camera controls only — automatic AI scene analysis is controlled by the visible switch above.")
             live_auto_store = st.checkbox(
                 "Auto-save new scene summaries to memory",
                 value=False,
@@ -847,7 +852,7 @@ with vision_tab:
                     "⚡ ANALYZE CURRENT FRAME NOW",
                     type="primary",
                     use_container_width=True,
-                    disabled=(not is_playing or not snapshot_jpeg or live_state.get_status()["analysis_busy"]),
+                    disabled=(not is_playing or frame_count <= 0 or live_state.get_status()["analysis_busy"]),
                     key="manual_live_analyze",
                 )
 
