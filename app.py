@@ -185,11 +185,12 @@ with vision_tab:
     with live_tab:
         st.markdown("<div class='hud-label'>Primary visual interface // live sensing</div><div class='hud-rule'></div>", unsafe_allow_html=True)
         st.subheader("LIVE OPTICAL FEED")
-        st.write("Browser camera → WebRTC stream → OpenCV frame processing → sampled vision analysis. Use Analyze Now for an immediate answer or enable periodic sampling.")
+        st.write("OpenCV can process every incoming camera frame continuously. Auto-observe sends sampled frames to the hosted vision model to describe the scene, visible objects, approximate positions, activities, and readable text.")
         st.warning("Live video is streamed to the app host. Frames sent for AI analysis are forwarded to an external inference provider. Recording is silent video only, limited to 60 seconds / 25 MB, and downloadable after stopping. Use consented fictional scenes only.")
-        live_auto_analyze = st.checkbox("Enable periodic AI analysis", value=False, key="live_auto_analyze", help="For a safer first test on limited cloud memory, begin with automatic analysis off. Click ANALYZE CURRENT FRAME NOW first; enable periodic sampling after one successful result.")
+        live_auto_analyze = st.checkbox("Enable always-on AI auto-observation", value=True, disabled=not status[0], key="live_auto_analyze", help="When the camera is streaming and the remote model is configured, analyze frames automatically at the selected interval. This sends sampled images to an external AI provider.")
+        live_opencv_always = st.checkbox("Keep OpenCV processing active on every live frame", value=True, key="live_opencv_always", help="OpenCV runs continuously on each incoming frame while the webcam stream is active. Turn this off only for troubleshooting.")
         live_interval = st.select_slider("Analyze a frame every", options=[15, 30, 60], value=30, key="live_interval_seconds", format_func=lambda x: f"{x} seconds")
-        live_mode_label = st.selectbox("Live analysis task", options=list(MODE_LABELS.values()), index=0, key="live_mode_label")
+        live_mode_label = st.selectbox("Live analysis task", options=list(MODE_LABELS.values()), index=0, key="live_mode_label", help="Auto-observe summarizes the overall scene, clearly visible objects and positions, visible activities, and readable text. Other modes focus on one task.")
         live_mode = next(k for k, v in MODE_LABELS.items() if v == live_mode_label)
         live_question = ""
         if live_mode == "visual_question":
@@ -214,9 +215,28 @@ with vision_tab:
         def on_live_video_frame(frame):
             try:
                 frame_bgr = frame.to_ndarray(format="bgr24")
-                processed_bgr, jpeg_bytes, metrics = process_live_frame(
-                    frame_bgr, max_side=640, enhance=live_enhance
-                )
+                if live_opencv_always:
+                    # Full OpenCV path runs for each frame received while streaming.
+                    processed_bgr, jpeg_bytes, metrics = process_live_frame(
+                        frame_bgr, max_side=640, enhance=live_enhance
+                    )
+                else:
+                    # Troubleshooting fallback: preserve a frame for preview/AI without
+                    # running the OpenCV metric/enhancement path.
+                    height, width = frame_bgr.shape[:2]
+                    fallback_buffer = io.BytesIO()
+                    Image.fromarray(frame_bgr[:, :, ::-1]).save(
+                        fallback_buffer, format="JPEG", quality=82
+                    )
+                    jpeg_bytes = fallback_buffer.getvalue()
+                    processed_bgr = frame_bgr
+                    metrics = {
+                        "width": width, "height": height,
+                        "brightness": None, "sharpness": None,
+                        "brightness_label": "OpenCV off",
+                        "sharpness_label": "OpenCV off",
+                        "jpeg_bytes": len(jpeg_bytes),
+                    }
                 live_state.update_frame(processed_bgr, jpeg_bytes, metrics)
                 return av.VideoFrame.from_ndarray(processed_bgr, format="bgr24")
             except Exception as exc:
@@ -324,10 +344,14 @@ with vision_tab:
 
                 if frame_metrics:
                     metric_cols = st.columns(3)
-                    metric_cols[0].metric("OpenCV brightness", f"{frame_metrics['brightness']}/255", frame_metrics["brightness_label"])
-                    metric_cols[1].metric("Focus detail", f"{frame_metrics['sharpness']}", frame_metrics["sharpness_label"])
+                    if live_opencv_always:
+                        metric_cols[0].metric("OpenCV brightness", f"{frame_metrics['brightness']}/255", frame_metrics["brightness_label"])
+                        metric_cols[1].metric("Focus detail", f"{frame_metrics['sharpness']}", frame_metrics["sharpness_label"])
+                    else:
+                        metric_cols[0].metric("OpenCV", "OFF")
+                        metric_cols[1].metric("Image metrics", "Paused")
                     metric_cols[2].metric("Frame", f"{frame_metrics['width']} × {frame_metrics['height']}")
-                    st.caption(f"Latest frame JPEG: {frame_metrics['jpeg_bytes']:,} bytes. Focus is a rough heuristic, not a diagnosis of image quality.")
+                    st.caption(f"Latest frame JPEG: {frame_metrics['jpeg_bytes']:,} bytes. Focus is a rough heuristic, not a guarantee of image quality.")
 
                 if current_status["latest_analysis_error"]:
                     st.error(f"Live processing/analysis notice: {current_status['latest_analysis_error']}")
