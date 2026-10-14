@@ -13,6 +13,7 @@ from html import escape
 import hmac
 import io
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Thread
@@ -30,6 +31,7 @@ from core.live_report import build_live_report
 from core.cloud_cv import process_image_opencv
 from core.cloud_live import LiveMonitorState, process_live_frame, draw_detection_overlay
 from core.voice import SUPPORTED_LANGUAGES, build_speech_html
+from core.cloud_voice import transcribe_audio, answer_voice_query
 
 ROOT = Path(__file__).resolve().parent
 
@@ -367,6 +369,35 @@ with vision_tab:
                 key="live_auto_observe_smooth",
                 help="Off by default for the smoothest feed. Enable for periodic hosted scene descriptions, or use ANALYZE CURRENT FRAME NOW when needed.",
             )
+            live_auto_store = st.checkbox(
+                "Auto-save new scene summaries to memory",
+                value=False,
+                disabled=not status[0] or not people,
+                key="live_auto_store_memory",
+                help="Requires automatic scene explanation. Saves text summaries only, under the demo profile you choose.",
+            )
+            live_store_person_id = None
+            live_store_interval = 60
+            if live_auto_store and people:
+                store_people_labels = {
+                    person["id"]: f'{person["name"]} — {person["relationship"]}'
+                    for person in people
+                }
+                live_store_person_id = st.selectbox(
+                    "Save live summaries under this profile",
+                    options=list(store_people_labels),
+                    format_func=lambda person_id: store_people_labels[person_id],
+                    key="live_auto_store_person",
+                )
+                live_store_interval = st.select_slider(
+                    "Minimum interval between saved summaries",
+                    options=[30, 60, 120],
+                    value=60,
+                    key="live_auto_store_interval",
+                    format_func=lambda seconds: f"Every {seconds} seconds",
+                )
+                if not live_auto_analyze:
+                    st.info("Also enable automatic scene explanation above. Auto-saving only stores completed AI summaries; it does not save video or every camera frame.")
             live_object_detection = st.checkbox(
                 "Enable local object detection + bounding boxes",
                 value=False,
@@ -811,6 +842,37 @@ with vision_tab:
                         st.rerun(scope="app")
 
                 observation = current_status["latest_observation"]
+                # Store only completed text observations, and only when the user has
+                # explicitly enabled auto-analysis + auto-storage and selected a profile.
+                if (
+                    observation
+                    and live_auto_store
+                    and live_auto_analyze
+                    and live_store_person_id is not None
+                ):
+                    try:
+                        observation_sequence = int(observation.get("sequence", 0))
+                        last_saved_sequence = int(
+                            st.session_state.get("live_auto_store_last_sequence", 0)
+                        )
+                        last_saved_at = float(
+                            st.session_state.get("live_auto_store_last_monotonic", 0.0)
+                        )
+                        if (
+                            observation_sequence > last_saved_sequence
+                            and time.monotonic() - last_saved_at >= live_store_interval
+                        ):
+                            save_memory(
+                                live_store_person_id,
+                                observation["text"],
+                                f'Auto-saved live scene summary ({observation.get("mode", "scene")}); model: {observation.get("model", "unknown")}',
+                            )
+                            st.session_state["live_auto_store_last_sequence"] = observation_sequence
+                            st.session_state["live_auto_store_last_monotonic"] = time.monotonic()
+                            st.toast("New live scene summary saved to the selected memory profile.")
+                    except Exception as exc:
+                        st.warning(f"Auto-save could not store this scene summary: {exc}")
+
                 detection_status = live_state.detection_snapshot()
                 if observation and st.session_state.get("live_result_sequence") != observation["sequence"]:
                     st.session_state["latest_result"] = {
@@ -1085,8 +1147,87 @@ with memory_tab:
             st.info("No memory notes saved for this person yet.")
 
 with voice_tab:
-    st.subheader("Voice companion")
-    st.write("Read visual observations and reviewed memory notes aloud using speech voices available on this device's browser. Speech is generated in the browser; this module does not send the text to a separate text-to-speech service or create an audio file.")
+    st.subheader("Talk to VisionQuest")
+    st.write("Record a short question, get it transcribed, and receive a spoken reply based on the latest completed visual observation and recent saved memory notes. This is push-to-talk, not a continuously open microphone.")
+    st.warning("When you press Listen & reply, the recorded audio is sent to Hugging Face for transcription. The question and relevant memory context are sent to the configured hosted model for a reply. Voice clips and transcripts are not automatically saved as memory entries. Use consented fictional demo data.")
+    voice_audio = st.audio_input(
+        "Record a short voice question",
+        sample_rate=16000,
+        key="voice_question_audio",
+        help="Tap to record, then stop. Ask about the current scene or a saved demo memory.",
+    )
+    voice_submit = st.button(
+        "🎙️ LISTEN & REPLY",
+        type="primary",
+        use_container_width=True,
+        disabled=voice_audio is None,
+        key="process_voice_question",
+    )
+    if voice_submit and voice_audio is not None:
+        audio_bytes = voice_audio.getvalue()
+        audio_hash = hashlib.sha256(audio_bytes).hexdigest()
+        if not audio_bytes:
+            st.warning("Record a short question before sending it.")
+        elif hmac.compare_digest(
+            audio_hash, st.session_state.get("voice_last_audio_hash", "")
+        ):
+            st.info("That recording has already been processed. Record a new message to ask another question.")
+        else:
+            try:
+                with st.spinner("Transcribing your question and preparing a short reply…"):
+                    transcript = transcribe_audio(
+                        audio_bytes,
+                        content_type=getattr(voice_audio, "type", None) or "audio/wav",
+                    )
+                    live_context = live_state.get_status().get("latest_observation")
+                    recent_memory_context = list_memories(limit=10)
+                    reply = answer_voice_query(
+                        transcript,
+                        latest_observation=live_context,
+                        memories=recent_memory_context,
+                    )
+                st.session_state["voice_last_audio_hash"] = audio_hash
+                st.session_state["voice_latest_transcript"] = transcript
+                st.session_state["voice_latest_reply"] = reply
+                history = st.session_state.get("voice_chat_history", [])
+                history.append({"question": transcript, "reply": reply})
+                st.session_state["voice_chat_history"] = history[-10:]
+            except Exception as exc:
+                st.error(f"Voice conversation could not complete: {exc}")
+
+    latest_voice_question = st.session_state.get("voice_latest_transcript", "")
+    latest_voice_reply = st.session_state.get("voice_latest_reply", "")
+    if latest_voice_question:
+        st.markdown("**You said**")
+        st.write(latest_voice_question)
+    if latest_voice_reply:
+        st.markdown("**VisionQuest replies**")
+        st.markdown(f"<div class='result'>{escape(latest_voice_reply)}</div>", unsafe_allow_html=True)
+        st.components.v1.html(
+            build_speech_html(
+                latest_voice_reply,
+                language=st.session_state.get("voice_language", "en-IN"),
+                rate=float(st.session_state.get("voice_rate", 0.92)),
+                widget_label="🔊 SPEAK REPLY",
+            ),
+            height=92,
+            scrolling=False,
+        )
+    st.caption("For a new turn, record a new clip and press Listen & reply. Replies use the latest completed scene analysis and up to 10 recent saved memory notes; they do not identify people or invent missing personal history.")
+    with st.expander("Recent voice turns"):
+        voice_history = st.session_state.get("voice_chat_history", [])
+        if voice_history:
+            for turn in reversed(voice_history):
+                st.markdown("**You**")
+                st.write(turn["question"])
+                st.markdown("**VisionQuest**")
+                st.write(turn["reply"])
+        else:
+            st.caption("Your voice turns for this browser session will appear here.")
+
+    st.divider()
+    st.subheader("Read aloud")
+    st.write("Read visual observations and reviewed memory notes aloud using speech voices available on this device's browser. Speech is generated in the browser using built-in speech synthesis, with no separate text-to-speech service or audio file.")
     settings_col, rate_col = st.columns([1, 1])
     with settings_col:
         st.selectbox(
@@ -1154,7 +1295,7 @@ with voice_tab:
             st.warning(str(exc))
     else:
         st.info("Enter text or load an observation or saved note. Then tap Speak text in the player.")
-    st.caption("Tip: Chrome and Edge generally have broad Web Speech API support. Available voices are provided by your device/browser and can differ by language. If speech does not start, check device volume and browser support.")
+    st.caption("Tip: Chrome and Edge generally have broad Web Speech API support. Available voices are provided by your device/browser and can differ by language. Spoken replies require a click on Speak reply.")
 
 with search_tab:
     st.subheader("Search saved memories")
@@ -1177,7 +1318,7 @@ with settings_tab:
     st.write("**OpenCV:** Headless OpenCV processes each live frame and renders selectable diagnostic views with detection overlays.")
     st.write(f"**Object detector:** {REALTIME_DETECTOR_LABEL}. The ONNX model runs on the app host using OpenCV DNN for each frame delivered by WebRTC; object detection does not call an external inference API.")
     st.write("**Camera:** Browser still capture plus WebRTC live stream. OpenCV processes each incoming frame on the cloud host. The Live camera & recording tab supports periodic AI analysis and download of silent MP4 clips up to 60 seconds/25 MB; WebRTC depends on camera permissions and STUN/TURN network access.")
-    st.write("**Voice:** Browser-native speech synthesis reads observations and manually selected memory notes aloud; no external TTS API key is required.")
+    st.write("**Voice:** Push-to-talk audio is transcribed through Hugging Face; replies use the configured chat model, and the browser reads replies aloud. Only user-submitted voice clips are sent; there is no always-listening microphone.")
     st.write("**Memory storage:** Shared SQLite demo database on the host. Its filesystem may reset on redeploy/restart; backups and durable production database setup are not included.")
     st.write("**Privacy:** Image bytes are processed on the hosting server and are not intentionally saved as image files. Memory notes are stored on the host. The app uses one shared password, not individual user accounts.")
     st.write("**Not production-ready for care:** no individual accounts, role permissions, medical validation, guaranteed persistent storage, or automatic face identification.")
