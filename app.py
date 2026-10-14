@@ -385,7 +385,10 @@ with vision_tab:
                         "sharpness_label": "OpenCV off",
                         "jpeg_bytes": len(display_jpeg),
                     }
-                live_state.update_frame(display_bgr, display_jpeg, metrics, analysis_jpeg=analysis_jpeg)
+                # Keep compatibility with the existing session-state API: the WebRTC
+                # return value renders the diagnostic view, while the cached JPEG remains
+                # the color frame used for AI sampling. Recording receives display_bgr.
+                live_state.update_frame(display_bgr, analysis_jpeg, metrics)
                 return av.VideoFrame.from_ndarray(display_bgr, format="bgr24")
             except Exception as exc:
                 live_state.finish_analysis(error=f"OpenCV frame processing error: {type(exc).__name__}: {exc}")
