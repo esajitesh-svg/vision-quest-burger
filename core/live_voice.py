@@ -187,6 +187,12 @@ class LiveVoiceAssistantState:
             self._error = str(error or "Unknown voice error")[:500]
             self._status = "Voice assistant needs attention"
 
+    def set_warning(self, warning: str) -> None:
+        """Show a storage warning without discarding a completed voice reply."""
+        with self.lock:
+            self._error = str(warning or "")[:500]
+            self._status = "Reply ready — long-term storage needs attention"
+
     def history_snapshot(self) -> list[dict[str, str]]:
         with self.lock:
             return [dict(turn) for turn in self._history[-4:]]
