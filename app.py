@@ -25,10 +25,105 @@ from streamlit_webrtc import WebRtcMode, webrtc_streamer
 from core.cloud_db import init_db, list_people, list_memories, save_person, save_memory, search_memories, export_memories_csv
 from core.cloud_vision import MODE_LABELS, analyze_image, model_status, prepare_image
 from core.cloud_cv import process_image_opencv
-from core.cloud_live import LiveMonitorState, process_live_frame, render_cv_view
+from core.cloud_live import LiveMonitorState, process_live_frame
 from core.voice import SUPPORTED_LANGUAGES, build_speech_html
 
 ROOT = Path(__file__).resolve().parent
+
+
+def render_cv_view(
+    frame_bgr,
+    mode: str = "COLOR + HUD",
+    canny_low: int = 55,
+    canny_high: int = 140,
+    frame_count: int = 0,
+):
+    """Render a selectable OpenCV diagnostic canvas without changing AI input."""
+    import numpy as np
+
+    if not isinstance(frame_bgr, np.ndarray) or frame_bgr.size == 0:
+        raise ValueError("Cannot render an empty OpenCV frame.")
+    if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
+        raise ValueError("OpenCV display input must have three color channels.")
+
+    source = frame_bgr.copy()
+    gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
+    low = max(0, min(254, int(canny_low)))
+    high = max(low + 1, min(255, int(canny_high)))
+
+    if mode == "GRAYSCALE":
+        display = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    elif mode == "CANNY EDGE MAP":
+        display = cv2.cvtColor(cv2.Canny(gray, low, high), cv2.COLOR_GRAY2BGR)
+    elif mode == "CONTOUR MAP":
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        _, mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        display = source.copy()
+        visible = [contour for contour in contours if cv2.contourArea(contour) >= 120]
+        cv2.drawContours(display, visible, -1, (70, 255, 115), 2)
+        for contour in visible[:30]:
+            x, y, width, height = cv2.boundingRect(contour)
+            if width > 24 and height > 20:
+                cv2.rectangle(display, (x, y), (x + width, y + height), (255, 210, 60), 1)
+    elif mode == "ADAPTIVE THRESHOLD":
+        mask = cv2.adaptiveThreshold(
+            cv2.GaussianBlur(gray, (5, 5), 0),
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            21,
+            5,
+        )
+        display = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+    elif mode == "HSV SATURATION":
+        saturation = cv2.cvtColor(source, cv2.COLOR_BGR2HSV)[:, :, 1]
+        display = cv2.applyColorMap(saturation, cv2.COLORMAP_TURBO)
+    else:
+        display = source.copy()
+        height, width = display.shape[:2]
+        cx, cy = width // 2, height // 2
+        hud_color = (255, 235, 70)
+        cv2.line(display, (cx - 22, cy), (cx - 7, cy), hud_color, 1, cv2.LINE_AA)
+        cv2.line(display, (cx + 7, cy), (cx + 22, cy), hud_color, 1, cv2.LINE_AA)
+        cv2.line(display, (cx, cy - 22), (cx, cy - 7), hud_color, 1, cv2.LINE_AA)
+        cv2.line(display, (cx, cy + 7), (cx, cy + 22), hud_color, 1, cv2.LINE_AA)
+        cv2.circle(display, (cx, cy), 4, hud_color, 1, cv2.LINE_AA)
+        arm, margin = max(12, min(30, width // 18, height // 12)), 10
+        for x, y, sx, sy in [
+            (margin, margin, 1, 1),
+            (width - margin, margin, -1, 1),
+            (margin, height - margin, 1, -1),
+            (width - margin, height - margin, -1, -1),
+        ]:
+            cv2.line(display, (x, y), (x + sx * arm, y), hud_color, 2, cv2.LINE_AA)
+            cv2.line(display, (x, y), (x, y + sy * arm), hud_color, 2, cv2.LINE_AA)
+
+    height, width = display.shape[:2]
+    cv2.rectangle(display, (0, 0), (width, min(32, height)), (4, 14, 20), thickness=-1)
+    cv2.rectangle(display, (0, max(0, height - 25)), (width, height), (4, 14, 20), thickness=-1)
+    cv2.putText(
+        display,
+        f"VISIONQUEST // {mode}"[:64],
+        (10, min(21, max(15, height - 2))),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.47,
+        (90, 240, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        display,
+        f"FRAME {max(0, int(frame_count)):06d}  |  {width}x{height}  |  OPENCV PIPELINE",
+        (10, max(15, height - 8)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.39,
+        (165, 222, 230),
+        1,
+        cv2.LINE_AA,
+    )
+    return display
+
 
 st.set_page_config(
     page_title="Smriti AI · VisionQuest Cloud",
