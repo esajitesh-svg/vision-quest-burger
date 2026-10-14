@@ -80,21 +80,23 @@ def build_live_report(
     else:
         age_value = max(0.0, float(age))
         lines.append("A completed object scan is available.")
-        if age_value > 9.0:
+        scan_is_stale = age_value > 1.5
+        if scan_is_stale:
             lines.append("The last object scan is stale; wait for a fresh scan before relying on those boxes.")
         detector_elapsed = status.get("elapsed_seconds")
         if isinstance(detector_elapsed, (int, float)) and detector_elapsed > 0:
             lines.append(f"Object-detection inference time: {detector_elapsed:.1f} seconds.")
 
-        if detections:
-            counts = Counter(str(item.get("label", "object")) for item in detections)
+        visible_detections = [] if scan_is_stale else detections
+        if visible_detections:
+            counts = Counter(str(item.get("label", "object")) for item in visible_detections)
             inventory = ", ".join(
                 f"{label} × {count}" if count > 1 else label
                 for label, count in sorted(counts.items(), key=lambda pair: pair[0].lower())
             )
-            lines.append(f"Detected {len(detections)} object instance(s) across {len(counts)} class(es): {inventory}.")
+            lines.append(f"Detected {len(visible_detections)} object instance(s) across {len(counts)} class(es): {inventory}.")
             lines.append("DETECTION DETAILS")
-            for index, item in enumerate(detections, start=1):
+            for index, item in enumerate(visible_detections, start=1):
                 label = str(item.get("label", "object"))
                 try:
                     confidence = max(0.0, min(1.0, float(item.get("score", 0.0))))
@@ -113,6 +115,8 @@ def build_live_report(
                     f"{index}. {label} — {confidence:.0%} confidence; "
                     f"approximate position: {position}; {bounds}."
                 )
+        elif scan_is_stale:
+            lines.append("The old object list is omitted because it is more than 1.5 seconds old.")
         else:
             lines.append(
                 "No objects were returned above the selected confidence threshold. "
