@@ -15,8 +15,21 @@ from core.face_recognition import (
  decode_image_bytes, detect_faces, encode_jpeg, recognize_faces,
 )
 from core.voice import build_speech_html
+from core.demo_mode import render_demo_hub
 
 st.set_page_config(page_title="Smriti AI",page_icon="✦",layout="wide",initial_sidebar_state="collapsed")
+
+experience_mode = st.radio(
+    "Choose experience",
+    ["Live Mode", "Demo Mode"],
+    horizontal=True,
+    key="experience_mode",
+    help="Demo Mode uses scripted sample replies without cloud AI requests; face matching runs locally when available.",
+)
+if experience_mode == "Demo Mode":
+    render_demo_hub()
+    st.stop()
+
 browser_voice_component=st.components.v1.declare_component("smriti_browser_voice",path=str(Path(__file__).resolve().parent/"components"/"browser_voice"))
 st.markdown("""<style>
 .stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"]{background:#050a10;color:#d9edf4}
