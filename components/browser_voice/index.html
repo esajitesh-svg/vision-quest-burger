@@ -13,6 +13,8 @@ button{border:1px solid #287181;border-radius:4px;padding:10px 14px;min-height:3
 #start{background:#00cfe8;color:#031015}
 #stop{background:#0b1b25;color:#c5d9e3}
 #test,#replay,#speak{background:#09212a;color:#70ecff}
+#audioStart{background:#baf7dd;color:#04130c}
+#audioStop{background:#402329;color:#ffe2e2}
 button:disabled{opacity:.38;cursor:not-allowed}
 #status{font:12px/1.5 system-ui;color:#79bdc9;flex:1;min-width:170px}
 #heard{font-size:12px;line-height:1.5;color:#a8c5d3;margin-top:7px;min-height:17px;overflow-wrap:anywhere}
@@ -30,10 +32,13 @@ button:disabled{opacity:.38;cursor:not-allowed}
     <button id="replay" type="button" disabled>↻ REPLAY LAST</button>
     <button id="speak" type="button" disabled>🗣 SPEAK ANSWER</button>
     <button id="stop" type="button">■ STOP</button>
+    <button id="audioStart" type="button">⏺ RECORD AUDIO CLIP</button>
+    <button id="audioStop" type="button" disabled>■ STOP & SAVE AUDIO</button>
     <div id="status" role="status" aria-live="polite"><span id="pulse" class="pulse"></span>Voice link idle.</div>
   </div>
   <div id="heard"></div>
-  <div class="note">Browser speech recognition is used for faster turn capture. Mic stays active until STOP; speaking pauses listening to prevent echo.</div>
+  <div id="audioStatus" class="note" role="status" aria-live="polite">Audio archive is off. Press RECORD AUDIO CLIP to save a visible, local recording (maximum 30 seconds).</div>
+  <div class="note">Speech recognition handles live questions. Raw microphone audio is recorded only after you explicitly press RECORD AUDIO CLIP and is saved locally when you stop.</div>
 </div>
 <script>
 (() => {
@@ -42,6 +47,9 @@ button:disabled{opacity:.38;cursor:not-allowed}
   const testButton = document.getElementById("test");
   const replayButton = document.getElementById("replay");
   const speakButton = document.getElementById("speak");
+  const audioStartButton = document.getElementById("audioStart");
+  const audioStopButton = document.getElementById("audioStop");
+  const audioStatusNode = document.getElementById("audioStatus");
   const statusNode = document.getElementById("status");
   const pulseNode = document.getElementById("pulse");
   const heardNode = document.getElementById("heard");
@@ -64,6 +72,115 @@ button:disabled{opacity:.38;cursor:not-allowed}
   let currentSpeechStarted = false;
   let lastSpokenText = "";
   let lastSpokenKind = "reply";
+  let archiveRecorder = null;
+  let archiveStream = null;
+  let archiveChunks = [];
+  let archiveStopTimer = null;
+
+  function setAudioStatus(message) {
+    audioStatusNode.textContent = String(message || "");
+  }
+
+  function stopArchiveTracks() {
+    if (archiveStream) {
+      for (const track of archiveStream.getTracks()) track.stop();
+    }
+    archiveStream = null;
+    archiveRecorder = null;
+    archiveChunks = [];
+    clearTimeout(archiveStopTimer);
+    archiveStopTimer = null;
+    audioStartButton.disabled = false;
+    audioStopButton.disabled = true;
+  }
+
+  async function startAudioArchive() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
+      setAudioStatus("Audio recording is not supported by this browser. Try current Chrome or Edge on localhost/HTTPS.");
+      return;
+    }
+    try {
+      setAudioStatus("Requesting microphone permission for a 30-second maximum recording…");
+      archiveStream = await navigator.mediaDevices.getUserMedia({
+        audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}
+      });
+      const preferredTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+      let chosenType = "";
+      if (typeof MediaRecorder.isTypeSupported === "function") {
+        chosenType = preferredTypes.find(type => MediaRecorder.isTypeSupported(type)) || "";
+      }
+      archiveRecorder = chosenType ? new MediaRecorder(archiveStream, {mimeType: chosenType}) : new MediaRecorder(archiveStream);
+      archiveChunks = [];
+      archiveRecorder.ondataavailable = event => {
+        if (event.data && event.data.size > 0) archiveChunks.push(event.data);
+      };
+      archiveRecorder.onerror = event => {
+        setAudioStatus("Audio recording failed: " + String(event.error && event.error.message || "browser recorder error"));
+      };
+      archiveRecorder.onstop = () => {
+        clearTimeout(archiveStopTimer);
+        const recorderMime = String(archiveRecorder && archiveRecorder.mimeType || chosenType || "audio/webm").split(";")[0];
+        const blob = new Blob(archiveChunks, {type: recorderMime});
+        stopArchiveTracks();
+        if (!blob.size) {
+          setAudioStatus("No audio was captured. Check the selected microphone and retry.");
+          return;
+        }
+        if (blob.size > 8 * 1024 * 1024) {
+          setAudioStatus("Audio clip exceeded the 8 MB upload guard and was not saved. Record a shorter clip.");
+          return;
+        }
+        setAudioStatus("Encoding the audio clip for local archive…");
+        const reader = new FileReader();
+        reader.onerror = () => setAudioStatus("Could not read the recorded audio blob.");
+        reader.onloadend = () => {
+          const dataUrl = String(reader.result || "");
+          const separator = dataUrl.indexOf(",");
+          const audioBase64 = separator >= 0 ? dataUrl.slice(separator + 1) : "";
+          if (!audioBase64) {
+            setAudioStatus("Could not encode the recorded audio.");
+            return;
+          }
+          const eventId = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+          setAudioStatus("Sending recorded clip to the local Smriti archive…");
+          sendValue({
+            event: "audio_archive",
+            event_id: eventId,
+            mime_type: recorderMime,
+            audio_base64: audioBase64,
+            duration_limit_seconds: 30
+          });
+          setAudioStatus("Clip sent to Smriti for local saving. Check the app for the saved file path.");
+        };
+        reader.readAsDataURL(blob);
+      };
+      archiveRecorder.start(250);
+      audioStartButton.disabled = true;
+      audioStopButton.disabled = false;
+      setAudioStatus("● RECORDING AUDIO · visible 30-second maximum · press STOP & SAVE AUDIO when finished.");
+      archiveStopTimer = setTimeout(() => {
+        if (archiveRecorder && archiveRecorder.state === "recording") {
+          setAudioStatus("30-second limit reached; saving the clip…");
+          archiveRecorder.stop();
+        }
+      }, 30000);
+    } catch (error) {
+      stopArchiveTracks();
+      setAudioStatus("Could not start microphone recording: " + String(error && error.message || error));
+    }
+  }
+
+  function stopAudioArchive() {
+    if (archiveRecorder && archiveRecorder.state === "recording") {
+      clearTimeout(archiveStopTimer);
+      setAudioStatus("Stopping microphone recording and saving the clip…");
+      try { archiveRecorder.stop(); }
+      catch (error) {
+        setAudioStatus("Could not stop audio recording: " + String(error && error.message || error));
+        stopArchiveTracks();
+      }
+    }
+  }
 
   function setStatus(message, live = false) {
     pulseNode.className = live ? "pulse live" : "pulse";
@@ -392,6 +509,14 @@ button:disabled{opacity:.38;cursor:not-allowed}
 
   startButton.addEventListener("click", startListening);
   stopButton.addEventListener("click", stopListening);
+  audioStartButton.addEventListener("click", startAudioArchive);
+  audioStopButton.addEventListener("click", stopAudioArchive);
+  window.addEventListener("pagehide", () => {
+    try {
+      if (archiveRecorder && archiveRecorder.state === "recording") archiveRecorder.stop();
+    } catch (_) {}
+    stopArchiveTracks();
+  });
 
   window.addEventListener("message", event => {
     if (!event.data || event.data.type !== "streamlit:render") return;
@@ -445,7 +570,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
         setStatus("Speech recognition unsupported. TEST VOICE still works; use Chrome/Edge for listening.");
       }
     }
-    window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: 190}, "*");
+    window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: 255}, "*");
   });
 
   window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1}, "*");
