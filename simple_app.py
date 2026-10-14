@@ -113,7 +113,7 @@ with r:
  analyze=st.button("ANALYZE CURRENT FRAME",use_container_width=True)
  st.markdown('</div>',unsafe_allow_html=True)
 with st.expander("06 / FACE RECOGNITION — LOCAL ENROLMENT", expanded=False):
- st.write("Register a reference portrait with the person's permission, then compare faces in the current camera frame. Portraits are stored in the configured app database.")
+ st.write("Register a reference portrait with the person's permission, then compare faces in the current live camera frame. Portraits are stored in the configured app database and shared with Demo Mode.")
  st.caption("Experimental matching can make mistakes. Confirm identity before relying on it. Faces that do not match confidently are shown as Unknown.")
  consent = st.checkbox("I have permission to store and use this person's reference photo.", key="face_consent")
  person_name = st.text_input("Person's chosen display name", key="face_name", max_chars=100)
