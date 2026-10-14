@@ -107,17 +107,19 @@ def render_cv_view(
     if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
         raise ValueError("OpenCV display input must have three color channels.")
 
-    source = frame_bgr.copy()
-    gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
+    source = frame_bgr
     low = max(0, min(254, int(canny_low)))
     high = max(low + 1, min(255, int(canny_high)))
 
     if mode == "GRAYSCALE":
+        gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
         display = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     elif mode == "CANNY EDGE MAP":
+        gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
         edges = cv2.Canny(gray, low, high)
         display = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
     elif mode == "CONTOUR MAP":
+        gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         _, mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -129,6 +131,7 @@ def render_cv_view(
             if width > 24 and height > 20:
                 cv2.rectangle(display, (x, y), (x + width, y + height), (255, 210, 60), 1)
     elif mode == "ADAPTIVE THRESHOLD":
+        gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
         mask = cv2.adaptiveThreshold(
             cv2.GaussianBlur(gray, (5, 5), 0),
             255,
