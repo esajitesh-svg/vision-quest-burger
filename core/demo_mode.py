@@ -76,8 +76,17 @@ def render_demo_hub() -> None:
     from core.face_recognition import (
         decode_image_bytes,
         detect_faces,
+        encode_jpeg,
         face_recognizer_available,
         recognize_faces,
+    )
+    from core.cloud_db import (
+        init_db,
+        list_people,
+        save_person,
+        save_person_portrait,
+        get_person_portrait,
+        delete_person_portrait,
     )
 
     st.markdown(
@@ -143,70 +152,116 @@ def render_demo_hub() -> None:
     with tab_faces:
         st.markdown("### Local face recognition")
         st.warning(
-            "Use only your own face or a person's photo with their permission. "
-            "Photos stay in this browser session's app memory and are not saved to the persistent people database."
+            "Reference portraits are stored in Smriti's configured app database and are shared with Live Mode. "
+            "Use only your own face or a person's photo with explicit permission. Demo AI replies and scene "
+            "descriptions stay simulated; face matching runs only when you request it."
         )
-        profiles = st.session_state.setdefault("demo_face_profiles", [])
+        try:
+            init_db()
+            all_people = list_people()
+            profiles = []
+            for person in all_people:
+                try:
+                    if get_person_portrait(int(person["id"])):
+                        profiles.append(person)
+                except Exception:
+                    continue
+        except Exception as db_exc:
+            profiles = []
+            st.error(f"Face database is unavailable: {type(db_exc).__name__}: {db_exc}")
+
         if not face_recognizer_available():
             st.error(
-                "Face matching is unavailable because the current OpenCV build lacks the contrib recognizer. "
-                "Install the OpenCV contrib headless package listed in the updated requirements, then restart the app."
+                "Face matching is unavailable because this OpenCV build lacks the contrib recognizer. "
+                "Install the OpenCV contrib package from requirements.txt and restart Smriti."
             )
 
-        with st.expander("1 · Register a consented reference photo", expanded=not bool(profiles)):
+        with st.expander("1 · Register or update a consented reference photo", expanded=not bool(profiles)):
             with st.form("demo_face_enroll_form", clear_on_submit=True):
-                display_name = st.text_input("Name or demo label", max_chars=80)
-                relationship = st.text_input("Optional label", max_chars=80, value="Demo profile")
+                display_name = st.text_input("Name or display label", max_chars=100)
+                relationship = st.text_input("Optional label", max_chars=100, value="Friend / family")
                 reference = st.file_uploader(
                     "Reference photo (JPEG, PNG, WEBP; 3 MB max)",
                     type=["jpg", "jpeg", "png", "webp"],
                     key="demo_face_reference_upload",
                 )
-                consent = st.checkbox("I have permission to use this photo for this demo.")
-                enroll = st.form_submit_button("REGISTER FACE", type="primary")
+                consent = st.checkbox("I have permission to store and use this photo for face matching.")
+                enroll = st.form_submit_button("REGISTER / UPDATE FACE", type="primary")
             if enroll:
                 if not consent:
                     st.warning("Confirm permission before registering the photo.")
                 elif not display_name.strip():
                     st.warning("Enter a name or label.")
+                elif not relationship.strip():
+                    st.warning("Enter a relationship or label.")
                 elif reference is None:
                     st.warning("Choose a reference photo.")
-                elif any(p["name"].casefold() == display_name.strip().casefold() for p in profiles):
-                    st.warning("That name is already registered in this demo session.")
                 elif len(reference.getvalue()) > 3 * 1024 * 1024:
                     st.warning("Choose an image no larger than 3 MB.")
                 else:
                     try:
-                        ref_frame = decode_image_bytes(reference.getvalue())
-                        found = detect_faces(ref_frame)
-                        if not found:
-                            st.error("No face was detected in that reference photo. Try a clear, front-facing photo with good lighting.")
-                        else:
-                            profiles.append(
-                                {
-                                    "id": max([int(p["id"]) for p in profiles], default=0) + 1,
-                                    "name": display_name.strip()[:80],
-                                    "relationship": relationship.strip()[:80] or "Demo profile",
-                                    "image_data": reference.getvalue(),
-                                }
+                        reference_bytes = reference.getvalue()
+                        ref_frame = decode_image_bytes(reference_bytes)
+                        if not detect_faces(ref_frame):
+                            st.error(
+                                "No face was detected in that reference photo. Try a clear, front-facing "
+                                "photo with good lighting."
                             )
-                            st.session_state["demo_face_profiles"] = profiles
-                            st.success("Reference face registered for this session.")
+                        else:
+                            current_people = list_people()
+                            existing = next(
+                                (
+                                    p for p in current_people
+                                    if str(p.get("name", "")).casefold() == display_name.strip().casefold()
+                                ),
+                                None,
+                            )
+                            if existing:
+                                person_id = int(existing["id"])
+                            else:
+                                save_person(
+                                    display_name.strip(),
+                                    relationship.strip(),
+                                    "Reference portrait registered with permission.",
+                                )
+                                person_id = int(next(
+                                    p["id"] for p in list_people()
+                                    if str(p.get("name", "")).casefold() == display_name.strip().casefold()
+                                ))
+                            # Normalize and bound stored image bytes before persisting the consented portrait.
+                            save_person_portrait(person_id, encode_jpeg(ref_frame), "image/jpeg")
+                            st.success(
+                                f"Reference face saved for {display_name.strip()}. "
+                                "This profile is now available in Live Mode too."
+                            )
                             st.rerun()
                     except Exception as exc:
                         st.error(f"Could not register this photo: {type(exc).__name__}: {exc}")
 
+        try:
+            all_people = list_people()
+            profiles = []
+            for person in all_people:
+                try:
+                    if get_person_portrait(int(person["id"])):
+                        profiles.append(person)
+                except Exception:
+                    continue
+        except Exception as db_exc:
+            profiles = []
+            st.warning(f"Could not load saved reference portraits: {type(db_exc).__name__}: {db_exc}")
+
         if profiles:
-            st.write("**Registered reference profiles**")
-            for p in profiles:
+            st.write("**Saved reference profiles shared with Live Mode**")
+            for person in profiles:
                 pcol, bcol = st.columns([4, 1])
-                pcol.write(f"{p['name']} · {p['relationship']}")
-                if bcol.button("Remove", key=f"demo_face_remove_{p['id']}"):
-                    st.session_state["demo_face_profiles"] = [x for x in profiles if x["id"] != p["id"]]
+                pcol.write(f"{person.get('name', 'Unnamed')} · {person.get('relationship', '')}")
+                if bcol.button("Remove portrait", key=f"demo_face_remove_{person['id']}"):
+                    delete_person_portrait(int(person["id"]))
                     st.session_state.pop("demo_face_result", None)
                     st.rerun()
 
-            st.markdown("### 2 · Check a test photo")
+            st.markdown("### 2 · Check a camera snapshot or uploaded test photo")
             source_capture, source_upload = st.tabs(["📸 Capture with camera", "📁 Upload test photo"])
             with source_capture:
                 test_capture = st.camera_input("Take a test photo", key="demo_face_capture")
@@ -217,20 +272,18 @@ def render_demo_hub() -> None:
                     key="demo_face_test_upload",
                 )
             test_file = test_capture if test_capture is not None else test_upload
-            if st.button("RECOGNIZE FACES", type="primary", disabled=test_file is None or not face_recognizer_available()):
+            if st.button(
+                "RECOGNIZE FACES",
+                type="primary",
+                disabled=test_file is None or not face_recognizer_available(),
+                key="demo_recognize_shared_faces",
+            ):
                 try:
                     frame = decode_image_bytes(test_file.getvalue())
-                    annotated, result = recognize_faces(
-                        frame,
-                        profiles,
-                        lambda profile_id: next(
-                            ({"image_data": item["image_data"]} for item in profiles if int(item["id"]) == int(profile_id)),
-                            None,
-                        ),
-                    )
+                    annotated, matches = recognize_faces(frame, profiles, get_person_portrait)
                     st.session_state["demo_face_result"] = {
                         "image": cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
-                        "faces": result,
+                        "faces": matches,
                     }
                 except Exception as exc:
                     st.session_state.pop("demo_face_result", None)
@@ -238,20 +291,20 @@ def render_demo_hub() -> None:
 
             face_result = st.session_state.get("demo_face_result")
             if face_result:
-                st.image(face_result["image"], caption="Local face boxes and matching labels", use_container_width=True)
+                st.image(face_result["image"], caption="Local face boxes and experimental matching labels", use_container_width=True)
                 if not face_result["faces"]:
-                    st.info("No face detected in the test photo.")
+                    st.info("No face was detected in the test photo.")
                 for item in face_result["faces"]:
                     if item["recognized"]:
-                        st.success(f"Recognized match: {item['name']} · experimental distance {item['distance']}")
+                        st.success(f"Possible match: {item['name']} · experimental distance {item['distance']}")
                     else:
                         st.info(f"Unknown person · no sufficiently close match (distance {item['distance']})")
                 st.caption(
-                    "This lightweight matcher is experimental and can confuse people with similar appearance or different lighting. "
-                    "Confirm identities with the person; do not use it for access control or safety-critical decisions."
+                    "This lightweight matcher is experimental and can confuse people under different lighting or poses. "
+                    "Verify each match with the person. Do not use it for access control or safety-critical decisions."
                 )
         else:
-            st.info("Register a consented reference photo to enable matching against it.")
+            st.info("No saved reference portraits yet. Register a consented photo above, then test a camera snapshot or uploaded image.")
 
     with tab_memory:
         st.markdown("### Sample memory retrieval")
