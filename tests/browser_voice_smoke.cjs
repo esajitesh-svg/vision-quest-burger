@@ -50,7 +50,7 @@ class FakeRecognition {
 }
 
 const elements = Object.fromEntries(
-  ["start", "stop", "test", "replay", "status", "pulse", "heard"].map(id => [id, new FakeElement(id)])
+  ["start", "stop", "test", "replay", "speak", "status", "pulse", "heard"].map(id => [id, new FakeElement(id)])
 );
 const listeners = {};
 const posted = [];
@@ -137,20 +137,23 @@ const countAfterTest = utterances.length;
 render({ ...baseArgs, speech_text: "The camera sees a blue notebook.", speech_sequence: 1 });
 assert.equal(utterances.length, countAfterTest + 1, "new AI reply should be sent to speechSynthesis");
 assert.equal(utterances.at(-1).text, "The camera sees a blue notebook.");
+assert.equal(elements.speak.disabled, false, "SPEAK ANSWER should enable once the app has an answer");
+elements.speak.click();
+assert.equal(utterances.at(-1).text, "The camera sees a blue notebook.", "manual answer playback should use current app text");
 
 // Simulate a browser that fails to start the first AI utterance. The component
 // should automatically retry once without requiring another user gesture.
 synth.silenceNext = true;
 render({ ...baseArgs, speech_text: "This answer should retry automatically.", speech_sequence: 2 });
 assert.equal(utterances.at(-1).text, "This answer should retry automatically.");
-assert.ok(runTimerByDelay(1800), "speech-start watchdog should be scheduled");
+assert.ok(runTimerByDelay(8000), "speech-start watchdog should allow a slow browser speech startup");
 assert.ok(runTimerByDelay(300), "failed reply should schedule one automatic retry");
 assert.equal(utterances.at(-1).text, "This answer should retry automatically.");
 assert.equal(utterances.filter(u => u.text === "This answer should retry automatically.").length, 2);
 
 // A reply that exists before the iframe's first render must not be marked consumed silently.
 const secondElements = Object.fromEntries(
-  ["start", "stop", "test", "replay", "status", "pulse", "heard"].map(id => [id, new FakeElement(id)])
+  ["start", "stop", "test", "replay", "speak", "status", "pulse", "heard"].map(id => [id, new FakeElement(id)])
 );
 const secondListeners = {};
 const secondUtterances = [];
@@ -183,4 +186,4 @@ secondListeners.message({ data: { type: "streamlit:render", args: {
 assert.equal(secondUtterances.length, 1, "first-render queued speech must not be dropped");
 assert.equal(secondUtterances[0].text, "A queued first reply.");
 
-console.log("browser voice smoke test passed: test, new reply, one dropped reply retry, and initial queued reply all reach speechSynthesis");
+console.log("browser voice smoke test passed: test, auto reply, manual speak answer, slow-start retry, and initial queued reply all reach speechSynthesis");
