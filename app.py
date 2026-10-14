@@ -15,6 +15,7 @@ import io
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Thread
 
 import av
 import cv2
@@ -24,8 +25,9 @@ from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
 from core.cloud_db import init_db, list_people, list_memories, save_person, save_memory, search_memories, export_memories_csv
 from core.cloud_vision import MODE_LABELS, analyze_image, model_status, prepare_image
+from core.cloud_detection import OBJECT_DETECTION_MODEL, detect_objects
 from core.cloud_cv import process_image_opencv
-from core.cloud_live import LiveMonitorState, process_live_frame
+from core.cloud_live import LiveMonitorState, process_live_frame, draw_detection_overlay
 from core.voice import SUPPORTED_LANGUAGES, build_speech_html
 
 ROOT = Path(__file__).resolve().parent
@@ -123,6 +125,37 @@ def render_cv_view(
         cv2.LINE_AA,
     )
     return display
+
+
+def run_live_vision_worker(live_state, sample_bytes: bytes, mode: str, question: str, max_side: int) -> None:
+    """Run remote scene understanding off the Streamlit/UI thread."""
+    try:
+        result = analyze_image(sample_bytes, mode=mode, focus=question, max_side=max_side)
+        observation = {
+            "text": result.text,
+            "mode": mode,
+            "model": result.model,
+            "elapsed": result.elapsed_seconds,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "sequence": int(datetime.now(timezone.utc).timestamp() * 1000),
+            "source_hash": hashlib.sha256(sample_bytes).hexdigest(),
+        }
+        live_state.finish_analysis(observation=observation)
+    except Exception as exc:
+        live_state.finish_analysis(error=f"{type(exc).__name__}: {exc}")
+
+
+def run_live_detection_worker(live_state, sample_bytes: bytes, token: str, threshold: float) -> None:
+    """Run discrete object detection off the Streamlit/WebRTC callback threads."""
+    try:
+        result = detect_objects(sample_bytes, token=token, score_threshold=threshold, max_detections=20)
+        live_state.finish_detection(
+            detections=result.detections,
+            model=result.model,
+            elapsed_seconds=result.elapsed_seconds,
+        )
+    except Exception as exc:
+        live_state.finish_detection(error=f"{type(exc).__name__}: {exc}")
 
 
 st.set_page_config(
@@ -307,11 +340,39 @@ with vision_tab:
 
     with live_tab:
         st.markdown("<div class='cv-workbench-label'>01 / LIVE SENSOR INPUT · WEBCAM</div><div class='cv-feed-heading'>LIVE OPTICAL FEED // REAL-TIME CV PIPELINE</div>", unsafe_allow_html=True)
-        st.write("This is the computer-vision workspace: the OpenCV display pipeline runs on every live frame. Switch between the color HUD, grayscale, Canny edges, contour mapping, adaptive thresholding, and HSV saturation views. The AI analyzer receives the color frame separately, so diagnostic views do not replace the image used for scene descriptions.")
+        st.write("VisionQuest now runs two separate perception paths: OpenCV draws a live diagnostic canvas, while a hosted detector identifies common object categories and returns confidence-labelled bounding boxes. A vision-language model separately explains sampled scenes. The detector and scene model run asynchronously, so remote requests do not block the camera's frame-processing callback.")
         st.warning("Live video is streamed to the app host. Frames sent for AI analysis are forwarded to an external inference provider. Recording is silent video only, limited to 60 seconds / 25 MB, and downloadable after stopping. Use consented fictional scenes only.")
-        live_auto_analyze = st.checkbox("Enable always-on AI auto-observation", value=bool(status[0]), disabled=not status[0], key="live_auto_observe_always", help="When the camera is streaming and the remote model is configured, analyze frames automatically at the selected interval. This sends sampled images to an external AI provider.")
-        live_opencv_always = st.checkbox("Keep OpenCV processing active on every live frame", value=True, key="live_opencv_always", help="OpenCV runs continuously on each incoming frame while the webcam stream is active. Turn this off only for troubleshooting.")
-        live_interval = st.select_slider("AI analysis target interval", options=[1, 2, 5, 10], value=1, key="live_interval_seconds", format_func=lambda x: "Every 1 second" if x == 1 else f"Every {x} seconds", help="Requests are serialized. The next sample is submitted as soon as the interval has elapsed and the previous request has finished; remote model latency can make results arrive slower than once per second.")
+        live_auto_analyze = st.checkbox("Enable automatic scene explanation", value=bool(status[0]), disabled=not status[0], key="live_auto_observe_always", help="A hosted vision-language model describes the scene, actions, approximate locations, and readable text from sampled color frames.")
+        live_object_detection = st.checkbox(
+            "Enable live object detection + label boxes",
+            value=bool(status[0]),
+            disabled=not status[0],
+            key="live_object_detection",
+            help="Runs a separate hosted object detector. It returns category labels, confidence scores, and bounding boxes; it does not identify a person by name.",
+        )
+        detector_settings = st.columns([1, 1], gap="small")
+        with detector_settings[0]:
+            live_detection_interval = st.select_slider(
+                "Object scan interval",
+                options=[2, 3, 5, 10],
+                value=3,
+                key="live_detection_interval",
+                format_func=lambda x: f"Every {x} seconds",
+                help="Only sampled frames are sent to hosted object detection. Actual update speed depends on provider latency and rate limits.",
+            )
+        with detector_settings[1]:
+            detection_threshold = st.slider(
+                "Minimum confidence",
+                min_value=25,
+                max_value=80,
+                value=40,
+                step=5,
+                key="live_detection_confidence",
+                format_func=lambda x: f"{x}%",
+                help="Raise this to hide weaker predictions; lower it to see more possible objects with more false positives.",
+            ) / 100.0
+        live_opencv_always = st.checkbox("Keep OpenCV processing active on every live frame", value=True, key="live_opencv_always", help="OpenCV transforms each incoming frame while the camera is streaming. Turn this off only for troubleshooting.")
+        live_interval = st.select_slider("AI scene explanation target interval", options=[1, 2, 5, 10], value=1, key="live_interval_seconds", format_func=lambda x: "Every 1 second" if x == 1 else f"Every {x} seconds", help="Scene explanations are serialized; slow provider requests can make results arrive less often than this target.")
         live_mode_label = st.selectbox("Live analysis task", options=list(MODE_LABELS.values()), index=0, key="live_auto_mode_label", help="Auto-observe summarizes the overall scene, clearly visible objects and positions, visible activities, and readable text. Other modes focus on one task.")
         live_mode = next(k for k, v in MODE_LABELS.items() if v == live_mode_label)
         live_question = ""
@@ -336,7 +397,7 @@ with vision_tab:
             canny_high = st.slider("Canny high", min_value=20, max_value=255, value=140, step=5, key="live_canny_high")
         live_enhance = st.checkbox("Apply OpenCV contrast enhancement to the AI input frame", value=False, key="live_opencv_enhance")
         recording_seconds = st.select_slider("Maximum clip duration", options=[15, 30, 60], value=30, key="live_record_seconds", format_func=lambda x: f"{x} seconds")
-        st.caption("The display operator transforms only the live canvas; AI samples the separate color frame. Recordings capture the visible CV display. Camera access requires HTTPS and network support for WebRTC.")
+        st.caption("Object labels and scene explanations send sampled camera frames to Hugging Face Inference Providers and may consume credits or hit rate limits. Boxes are predictions, can be wrong, and may stay on screen briefly while the next result is computed. The model labels object categories; it does not identify a person by name.")
 
         rtc_configuration = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
         turn_url = get_secret("TURN_SERVER_URL")
@@ -364,6 +425,17 @@ with vision_tab:
                         canny_high=canny_high,
                         frame_count=live_state.frame_count + 1,
                     )
+                    detection_overlay = live_state.detection_snapshot()
+                    if (
+                        detection_overlay["detections"]
+                        and detection_overlay["age_seconds"] is not None
+                        and detection_overlay["age_seconds"] <= 9.0
+                    ):
+                        display_bgr = draw_detection_overlay(
+                            display_bgr,
+                            detection_overlay["detections"],
+                            age_seconds=detection_overlay["age_seconds"],
+                        )
                     ok, display_encoded = cv2.imencode(
                         ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 82]
                     )
@@ -430,55 +502,36 @@ with vision_tab:
                     key="manual_live_analyze",
                 )
 
-                def analyze_and_store(sample_bytes):
-                    result = analyze_image(
-                        sample_bytes,
-                        mode=live_mode,
-                        focus=live_question,
-                        max_side=live_max_side,
-                    )
-                    observation = {
-                        "text": result.text,
-                        "mode": live_mode,
-                        "model": result.model,
-                        "elapsed": result.elapsed_seconds,
-                        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-                        "sequence": int(datetime.now(timezone.utc).timestamp() * 1000),
-                        "source_hash": hashlib.sha256(sample_bytes).hexdigest(),
-                    }
-                    live_state.finish_analysis(observation=observation)
-                    st.session_state["latest_result"] = {
-                        "text": result.text,
-                        "mode": f"Live · {live_mode}",
-                        "model": result.model,
-                        "elapsed": result.elapsed_seconds,
-                        "timestamp": observation["timestamp"],
-                        "source_hash": observation["source_hash"],
-                        "origin": "live",
-                    }
-                    return observation
+                # Launch remote inference in daemon threads. The WebRTC callback and
+                # this 1-second fragment remain free to refresh the live CV workspace.
+                if is_playing and live_object_detection:
+                    detection_sample = live_state.take_detection_sample(live_detection_interval)
+                    if detection_sample is not None:
+                        Thread(
+                            target=run_live_detection_worker,
+                            args=(live_state, detection_sample, get_secret("HF_TOKEN"), detection_threshold),
+                            daemon=True,
+                        ).start()
 
                 if manual_analyze:
                     sample = live_state.take_analysis_sample(live_interval, force=True)
                     if sample is None:
-                        st.warning("No fresh frame is ready or the analyzer is busy. Wait a moment and retry.")
+                        st.warning("No fresh frame is ready or the scene analyzer is already busy.")
                     else:
-                        try:
-                            with st.spinner("Analyzing the current OpenCV frame…"):
-                                analyze_and_store(sample)
-                            st.rerun(scope="app")
-                        except Exception as exc:
-                            live_state.finish_analysis(error=f"{type(exc).__name__}: {exc}")
-                            st.error(f"Live image analysis failed: {type(exc).__name__}: {exc}")
+                        Thread(
+                            target=run_live_vision_worker,
+                            args=(live_state, sample, live_mode, live_question, live_max_side),
+                            daemon=True,
+                        ).start()
+                        st.info("Scene analysis started. The live camera and object detector continue while the result is computed.")
                 elif is_playing and live_auto_analyze:
                     sample = live_state.take_analysis_sample(live_interval)
                     if sample is not None:
-                        try:
-                            with st.spinner("Analyzing the latest live frame…"):
-                                analyze_and_store(sample)
-                            st.rerun(scope="app")
-                        except Exception as exc:
-                            live_state.finish_analysis(error=f"{type(exc).__name__}: {exc}")
+                        Thread(
+                            target=run_live_vision_worker,
+                            args=(live_state, sample, live_mode, live_question, live_max_side),
+                            daemon=True,
+                        ).start()
 
                 current_status = live_state.get_status()
                 if not is_playing:
@@ -503,6 +556,53 @@ with vision_tab:
                         metric_cols[1].metric("Image metrics", "Paused")
                     metric_cols[2].metric("Frame", f"{frame_metrics['width']} × {frame_metrics['height']}")
                     st.caption(f"Latest frame JPEG: {frame_metrics['jpeg_bytes']:,} bytes. Focus is a rough heuristic, not a guarantee of image quality.")
+
+                st.markdown("<div class='cv-workbench-label'>03 / OBJECT DETECTION · CLASS LABELS + CONFIDENCE</div>", unsafe_allow_html=True)
+                detection_status = live_state.detection_snapshot()
+                detector_cols = st.columns(3, gap="small")
+                detector_cols[0].metric("Objects detected", len(detection_status["detections"]))
+                detector_cols[1].metric(
+                    "Detector",
+                    "SCANNING" if detection_status["busy"] else ("READY" if detection_status["age_seconds"] is not None else ("ENABLED" if live_object_detection else "PAUSED")),
+                )
+                detector_cols[2].metric(
+                    "Last scan",
+                    f"{detection_status['elapsed_seconds']:.1f}s" if detection_status["age_seconds"] is not None else "—",
+                    f"{detection_status['age_seconds']:.1f}s ago" if detection_status["age_seconds"] is not None else None,
+                )
+                if detection_status["error"]:
+                    st.warning(f"Object detection notice: {detection_status['error']}")
+                elif not live_object_detection:
+                    st.caption("Live object detection is paused. Enable it above to display object labels and bounding boxes.")
+                elif detection_status["busy"]:
+                    st.caption("The detector is classifying the latest sample frame. The camera feed continues independently.")
+                elif detection_status["age_seconds"] is None:
+                    st.info("Waiting for the first object-detection result. Start the camera stream to begin.")
+                elif detection_status["detections"]:
+                    st.dataframe(
+                        [
+                            {
+                                "OBJECT": item["label"],
+                                "CONFIDENCE": f"{item['score']:.0%}",
+                                "BOX (x1, y1, x2, y2)": (
+                                    f"{item['box']['xmin']}, {item['box']['ymin']}, "
+                                    f"{item['box']['xmax']}, {item['box']['ymax']}"
+                                ),
+                            }
+                            for item in detection_status["detections"]
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                    st.caption(
+                        f"{detection_status['model']} · results refreshed asynchronously; "
+                        "confidence is a model score, not a guarantee of correctness."
+                    )
+                else:
+                    st.caption(
+                        "The latest scan found no objects above the confidence threshold. "
+                        "Try lowering the threshold or improving lighting/framing."
+                    )
 
                 if current_status["latest_analysis_error"]:
                     st.error(f"Live processing/analysis notice: {current_status['latest_analysis_error']}")
@@ -558,6 +658,17 @@ with vision_tab:
                         st.rerun(scope="app")
 
                 observation = current_status["latest_observation"]
+                if observation and st.session_state.get("live_result_sequence") != observation["sequence"]:
+                    st.session_state["latest_result"] = {
+                        "text": observation["text"],
+                        "mode": f"Live · {observation['mode']}",
+                        "model": observation["model"],
+                        "elapsed": observation["elapsed"],
+                        "timestamp": observation["timestamp"],
+                        "source_hash": observation["source_hash"],
+                        "origin": "live",
+                    }
+                    st.session_state["live_result_sequence"] = observation["sequence"]
                 if observation:
                     st.subheader("Latest live AI observation")
                     st.markdown(f"<div class='result'>{escape(observation['text'])}</div>", unsafe_allow_html=True)
@@ -856,7 +967,8 @@ with settings_tab:
     ready, status_message = model_status()
     st.write(f"**Vision engine:** {status_message}")
     st.write("**Model:** HuggingFaceTB/SmolVLM-256M-Instruct")
-    st.write("**OpenCV:** Headless OpenCV image-processing module is enabled for captured/uploaded frames.")
+    st.write("**OpenCV:** Headless OpenCV processes each live frame and renders selectable diagnostic views with detection overlays.")
+    st.write(f"**Object detector:** {OBJECT_DETECTION_MODEL} via Hugging Face Inference Providers; returns category labels, confidence scores, and bounding boxes for sampled frames.")
     st.write("**Camera:** Browser still capture plus WebRTC live stream. OpenCV processes each incoming frame on the cloud host. The Live camera & recording tab supports periodic AI analysis and download of silent MP4 clips up to 60 seconds/25 MB; WebRTC depends on camera permissions and STUN/TURN network access.")
     st.write("**Voice:** Browser-native speech synthesis reads observations and manually selected memory notes aloud; no external TTS API key is required.")
     st.write("**Memory storage:** Shared SQLite demo database on the host. Its filesystem may reset on redeploy/restart; backups and durable production database setup are not included.")
