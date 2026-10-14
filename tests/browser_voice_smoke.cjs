@@ -132,6 +132,8 @@ const baseArgs = {
 };
 
 render({ ...baseArgs });
+assert.equal(typeof elements.audioStart.handlers.click, "function", "explicit audio archive start control should be wired");
+assert.equal(typeof elements.audioStop.handlers.click, "function", "explicit audio archive stop control should be wired");
 elements.test.click();
 assert.ok(utterances.some(u => u.text.includes("Smriti voice test")), "TEST VOICE click should call speechSynthesis");
 const countAfterTest = utterances.length;
