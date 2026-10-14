@@ -47,6 +47,8 @@ def test_face_image_decoder_rejects_bad_data():
 
 
 from core.local_granite import clean_granite_reply, prepare_ollama_image
+from core.local_archive import archive_event, save_media, get_archive_dir
+import json
 
 
 def test_granite_reply_cleaner_hides_reasoning_trace():
@@ -83,3 +85,53 @@ def test_granite_observer_image_prep_rejects_empty_image():
         assert "No camera image" in str(exc)
     else:
         raise AssertionError("Empty image bytes should be rejected")
+
+
+
+def test_local_archive_writes_tagged_jsonl_event(tmp_path, monkeypatch):
+    monkeypatch.setenv("SMRITI_ARCHIVE_DIR", str(tmp_path / "smriti-archive"))
+
+    path = archive_event(
+        "conversation_turn",
+        {"question": "Where are my keys?", "answer": "I do not have a saved record."},
+        {"people": "Sam", "place": "home", "activity": "  ", "ignored": "not a supported tag"},
+    )
+
+    assert path.is_file()
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["type"] == "conversation_turn"
+    assert rows[0]["question"] == "Where are my keys?"
+    assert rows[0]["tags"] == {"people": "Sam", "place": "home"}
+
+
+def test_local_archive_saves_media_and_indexes_it(tmp_path, monkeypatch):
+    root = tmp_path / "smriti-archive"
+    monkeypatch.setenv("SMRITI_ARCHIVE_DIR", str(root))
+
+    saved = save_media(
+        "audio",
+        b"test-audio-bytes",
+        "webm",
+        "audio/webm",
+        {"people": "A person with permission", "place": "garden"},
+        {"maximum_recording_seconds": 30},
+    )
+
+    assert saved.is_file()
+    assert saved.read_bytes() == b"test-audio-bytes"
+    assert saved.parent == root / "audio"
+    events = [json.loads(line) for line in (root / "activity.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert events[-1]["type"] == "media_saved"
+    assert events[-1]["media_kind"] == "audio"
+    assert events[-1]["tags"]["place"] == "garden"
+
+
+def test_local_archive_rejects_unknown_media_type(tmp_path, monkeypatch):
+    monkeypatch.setenv("SMRITI_ARCHIVE_DIR", str(tmp_path / "smriti-archive"))
+    try:
+        save_media("audio", b"data", "exe", "application/octet-stream")
+    except ValueError as exc:
+        assert "Unsupported archive file type" in str(exc)
+    else:
+        raise AssertionError("Unsupported media types must be rejected")
