@@ -56,17 +56,24 @@ def test_voice_reply_uses_scene_and_memory_context(monkeypatch):
     monkeypatch.setattr(voice, "get_hf_token", lambda: "hf-test-token")
     monkeypatch.setattr(voice.requests, "post", fake_post)
     result = voice.answer_voice_query(
-        "Where are the keys?",
-        latest_observation={"text": "A set of keys is visible on a desk.", "timestamp": "now"},
+        "Where are the keys now?",
+        latest_observation={"text": "A set of keys was visible on a desk.", "timestamp": "now"},
         memories=[{"person_name": "Demo", "relationship": "test profile", "note": "Keys usually stay on the desk."}],
+        conversation_history=[{"question": "What was I asking about?", "reply": "You asked about your keys."}],
+        live_image_bytes=b"fake-jpeg-bytes",
     )
 
     assert result == "The latest note says the keys are on the desk."
     assert calls["url"] == voice.CHAT_URL
     assert calls["payload"]["max_tokens"] == 180
     user_content = calls["payload"]["messages"][1]["content"]
-    assert "A set of keys is visible on a desk." in user_content
-    assert "Keys usually stay on the desk." in user_content
+    assert isinstance(user_content, list)
+    text_part = next(part["text"] for part in user_content if part.get("type") == "text")
+    image_part = next(part for part in user_content if part.get("type") == "image_url")
+    assert "A set of keys was visible on a desk." in text_part
+    assert "Keys usually stay on the desk." in text_part
+    assert "You asked about your keys." in text_part
+    assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
 def test_voice_reply_rejects_empty_question():
