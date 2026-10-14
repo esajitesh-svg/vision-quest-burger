@@ -34,8 +34,10 @@ class FakeUtterance {
   }
 }
 
+const recognitions = [];
 class FakeRecognition {
   constructor() {
+    recognitions.push(this);
     this.lang = "en-IN";
     this.continuous = false;
     this.interimResults = false;
@@ -134,6 +136,25 @@ elements.test.click();
 assert.ok(utterances.some(u => u.text.includes("Smriti voice test")), "TEST VOICE click should call speechSynthesis");
 const countAfterTest = utterances.length;
 
+// The browser recognizer must report both readiness and a final transcript to Streamlit.
+elements.start.click();
+assert.equal(recognitions.length, 1, "Activate Listening should create a browser recognizer");
+const recognition = recognitions[0];
+assert.ok(posted.some(message =>
+  message.type === "streamlit:setComponentValue"
+  && message.value && message.value.event === "status"
+  && message.value.code === "listening"
+), "recognition startup should report microphone readiness");
+recognition.onresult({
+  resultIndex: 0,
+  results: [{ 0: { transcript: "Hi Smriti, what can you do?" }, isFinal: true }]
+});
+assert.ok(posted.some(message =>
+  message.type === "streamlit:setComponentValue"
+  && message.value && message.value.event === "transcript"
+  && message.value.transcript === "Hi Smriti, what can you do?"
+), "final recognized questions must be sent to the Streamlit app");
+
 render({ ...baseArgs, speech_text: "The camera sees a blue notebook.", speech_sequence: 1 });
 assert.equal(utterances.length, countAfterTest + 1, "new AI reply should be sent to speechSynthesis");
 assert.equal(utterances.at(-1).text, "The camera sees a blue notebook.");
@@ -186,4 +207,4 @@ secondListeners.message({ data: { type: "streamlit:render", args: {
 assert.equal(secondUtterances.length, 1, "first-render queued speech must not be dropped");
 assert.equal(secondUtterances[0].text, "A queued first reply.");
 
-console.log("browser voice smoke test passed: test, auto reply, manual speak answer, slow-start retry, and initial queued reply all reach speechSynthesis");
+console.log("browser voice smoke test passed: test, recognition status and transcript, auto reply, manual speak answer, slow-start retry, and initial queued reply pass");
