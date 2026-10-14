@@ -243,6 +243,9 @@ button:disabled{opacity:.38;cursor:not-allowed}
       if (args.enabled && !desiredListening && !speaking) {
         setStatus("Ready. Press Activate to begin listening.");
       }
+      if (desiredListening && args.enabled && !args.busy && !speaking && !recognitionRunning) {
+        scheduleRestart(250);
+      }
     }
     if (args.last_transcript) heardNode.textContent = "Last heard: " + String(args.last_transcript).slice(0, 300);
     window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: 110}, "*");
