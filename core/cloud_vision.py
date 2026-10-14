@@ -146,15 +146,16 @@ def analyze_image(
 
     image, original_size = prepare_image(image_bytes, max_side=max_side)
     buffer = BytesIO()
-    # Preserve fine visual details for the hosted vision-language model. Live camera
-    # samples are downsized before this step, so high JPEG quality does not create pixels.
-    image.save(buffer, format="JPEG", quality=95, optimize=True)
+    # Use a fast JPEG path: live observation favors responsive results at 768 px by
+    # default; the maximum-detail option remains available for tasks that need it.
+    image.save(buffer, format="JPEG", quality=90, optimize=False)
     image_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
     data_url = "data:image/jpeg;base64," + image_b64
 
-    # Detailed live observations need a larger response budget than simple scene summaries.
-    max_tokens = 700 if mode == "auto_observe" else (
-        500 if mode in ("objects", "read_text", "visual_question") else 320
+    # Bound generation so a live observation does not spend excessive time producing prose.
+    # Increase image detail manually only when fine text/small-object detail is important.
+    max_tokens = 450 if mode == "auto_observe" else (
+        360 if mode in ("objects", "read_text", "visual_question") else 220
     )
     payload = {
         "model": MODEL_ID,
