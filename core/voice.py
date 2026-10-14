@@ -53,13 +53,19 @@ def build_speech_html(
     language: str = "en-IN",
     rate: float = 0.92,
     widget_label: str = "Read aloud",
+    autoplay: bool = False,
 ) -> str:
-    """Return a self-contained safe HTML player using browser speech synthesis."""
+    """Return a self-contained safe HTML player using browser speech synthesis.
+
+    Autoplay is intended for a fresh, user-requested voice-assistant reply.
+    A visible Speak button remains available if the browser blocks automatic speech.
+    """
     spoken_text = normalize_speech_text(text)
     selected_language = language if language in SUPPORTED_LANGUAGES else "en-IN"
     selected_rate = min(1.25, max(0.65, float(rate)))
     text_js = _safe_js_string(spoken_text)
     lang_js = _safe_js_string(selected_language)
+    autoplay_js = "true" if autoplay else "false"
     label_html = html.escape(widget_label[:80] or "Read aloud")
     return f"""<!doctype html>
 <html lang="en">
@@ -119,6 +125,13 @@ input[type=range] {{ width:95px; accent-color:#00cfe8; }}
     if (synth) synth.cancel();
     status.textContent = 'Speech stopped.';
   }});
+  // Reuse this site's browser-native voice and rate controls.
+  // Auto-speak is requested only for a new reply after an explicit user action.
+  if ({autoplay_js}) {{
+    window.setTimeout(() => {{
+      speak();
+    }}, 120);
+  }}
 }})();
 </script>
 </body></html>"""
