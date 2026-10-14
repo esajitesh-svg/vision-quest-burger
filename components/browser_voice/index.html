@@ -220,8 +220,12 @@ button:disabled{opacity:.38;cursor:not-allowed}
     }
     // Some Chromium builds leave speechSynthesis paused after cancel(). Explicitly
     // resume it before queueing the next utterance.
-    speech.cancel();
-    speech.resume();
+    try {
+      speech.cancel();
+      speech.resume();
+    } catch (error) {
+      setStatus("Could not reset browser speech: " + String(error && error.message || error));
+    }
     const utterance = new SpeechSynthesisUtterance(String(text));
     const lang = args.language || "en-IN";
     utterance.lang = lang;
@@ -297,8 +301,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
       return;
     }
     try {
-      speech.cancel();
-      speech.resume();
+      try { speech.cancel(); speech.resume(); } catch (_) {}
       const test = new SpeechSynthesisUtterance("Smriti voice test. If you can hear this, speaker output is working.");
       test.lang = args.language || "en-IN";
       test.rate = Math.max(0.65, Math.min(1.25, Number(args.rate || 0.92)));
@@ -348,29 +351,29 @@ button:disabled{opacity:.38;cursor:not-allowed}
     previouslyBusy = Boolean(args.busy);
     if (!initialized) {
       initialized = true;
-      // Do not mark a reply/narration as consumed on the component's first render.
-      // An existing pending message must still reach the speech queue on the next
-      // Streamlit fragment refresh (for example after toggling JARVIS on again).
+      // Start from zero so a reply queued before the iframe mounted is not lost.
+      // The common sequence check below consumes it immediately on this render.
       lastSpeechSequence = 0;
       setStatus(args.enabled ? "Ready. Press Activate to grant mic access and begin." : "Enable LIVE JARVIS and start the camera first.");
-    } else {
-      const sequence = Number(args.speech_sequence || 0);
-      if (sequence > lastSpeechSequence && args.speech_text) {
-        lastSpeechSequence = sequence;
-        speakUpdate(args.speech_text, sequence, args.speech_kind || "reply");
-      }
-      // Recover listening if the model errors out before producing a reply.
-      if (awaitingReply && !args.busy && (wasBusy || args.voice_error)) {
-        awaitingReply = false;
-        setStatus(args.voice_error ? "Reply failed — listening again. Check the notice in the app." : "Ready for your next question.", true);
-      }
-      if (args.enabled && !desiredListening && !speaking && !userStopped) {
-        setStatus("Ready. Press Activate to begin listening.");
-      }
-      if (userStopped) setStatus("Voice link stopped.");
-      if (desiredListening && args.enabled && !args.busy && !speaking && !awaitingReply && !recognitionRunning) {
-        scheduleRestart(250);
-      }
+    }
+
+    const sequence = Number(args.speech_sequence || 0);
+    if (sequence > lastSpeechSequence && args.speech_text) {
+      lastSpeechSequence = sequence;
+      speakUpdate(args.speech_text, sequence, args.speech_kind || "reply");
+    }
+
+    // Recover listening if the model errors out before producing a reply.
+    if (awaitingReply && !args.busy && (wasBusy || args.voice_error)) {
+      awaitingReply = false;
+      setStatus(args.voice_error ? "Reply failed — listening again. Check the notice in the app." : "Ready for your next question.", true);
+    }
+    if (args.enabled && !desiredListening && !speaking && !userStopped) {
+      setStatus("Ready. Press Activate to begin listening.");
+    }
+    if (userStopped) setStatus("Voice link stopped.");
+    if (desiredListening && args.enabled && !args.busy && !speaking && !awaitingReply && !recognitionRunning) {
+      scheduleRestart(250);
     }
     if (args.last_transcript) heardNode.textContent = "Last heard: " + String(args.last_transcript).slice(0, 300);
     if (!speech || typeof window.SpeechSynthesisUtterance === "undefined") {
