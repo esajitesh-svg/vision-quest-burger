@@ -315,6 +315,66 @@ def delete_person_portrait(person_id: int) -> None:
         conn.execute("DELETE FROM person_portraits WHERE person_id=?", (int(person_id),))
 
 
+def search_observations(query: str, limit: int = 50) -> list[dict]:
+    """Search the complete observation history rather than only the newest page."""
+    value = (query or "").strip()
+    if not value:
+        return []
+    tokens = [
+        token for token in re.findall(r"[\\w]+", value.casefold(), flags=re.UNICODE)
+        if len(token) > 1 and token not in _MEMORY_QUERY_STOPWORDS
+    ][:8]
+    if not tokens:
+        return list_observations(limit) if _MEMORY_RECALL_CUES.search(value) else []
+
+    terms = []
+    params: list[str | int] = []
+    for token in tokens:
+        terms.append("(LOWER(note) LIKE LOWER(?) OR LOWER(source) LIKE LOWER(?) OR LOWER(model) LIKE LOWER(?))")
+        pattern = "%" + token + "%"
+        params.extend([pattern, pattern, pattern])
+    params.append(max(1, min(int(limit), 200)))
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM observations WHERE " + " OR ".join(terms) + " ORDER BY id DESC LIMIT ?",
+            tuple(params),
+        ).fetchall()
+    results = [dict(row) for row in rows]
+    if not results and _MEMORY_RECALL_CUES.search(value):
+        return list_observations(limit)
+    return results
+
+
+def search_conversation_history(query: str, limit: int = 50) -> list[dict]:
+    """Search conversations across the full stored history."""
+    value = (query or "").strip()
+    if not value:
+        return []
+    tokens = [
+        token for token in re.findall(r"[\\w]+", value.casefold(), flags=re.UNICODE)
+        if len(token) > 1 and token not in _MEMORY_QUERY_STOPWORDS
+    ][:8]
+    if not tokens:
+        return list_conversation_turns(limit) if _MEMORY_RECALL_CUES.search(value) else []
+
+    terms = []
+    params: list[str | int] = []
+    for token in tokens:
+        terms.append("(LOWER(user_text) LIKE LOWER(?) OR LOWER(assistant_text) LIKE LOWER(?) OR LOWER(source) LIKE LOWER(?))")
+        pattern = "%" + token + "%"
+        params.extend([pattern, pattern, pattern])
+    params.append(max(1, min(int(limit), 200)))
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM conversation_turns WHERE " + " OR ".join(terms) + " ORDER BY id DESC LIMIT ?",
+            tuple(params),
+        ).fetchall()
+    results = [dict(row) for row in rows]
+    if not results and _MEMORY_RECALL_CUES.search(value):
+        return list_conversation_turns(limit)
+    return results
+
+
 def search_activity_for_voice(query: str, limit: int = 10) -> list[dict]:
     """Retrieve curated notes plus relevant prior conversations and observations."""
     value = (query or "").strip()
@@ -336,38 +396,36 @@ def search_activity_for_voice(query: str, limit: int = 10) -> list[dict]:
     recall_cue = bool(_MEMORY_RECALL_CUES.search(value))
 
     candidates: list[tuple[int, int, dict]] = []
-    for row in list_observations(limit=300):
+    for row in search_observations(value, limit=100):
         haystack = (str(row.get("note", "")) + " " + str(row.get("source", ""))).casefold()
         score = 5 if value.casefold() and value.casefold() in haystack else 0
         score += sum(1 for token in tokens if token in haystack)
-        if score or recall_cue:
-            candidates.append((score, int(row.get("id", 0)), {
-                "id": "observation-" + str(row.get("id", "")),
-                "person_name": "Past observation",
-                "relationship": str(row.get("source", "Camera")),
-                "created_at": str(row.get("observed_at", row.get("created_at", ""))),
-                "note": "Previously observed: " + str(row.get("note", ""))[:1200],
-                "source": str(row.get("model", "Vision analysis")),
-            }))
+        candidates.append((score, int(row.get("id", 0)), {
+            "id": "observation-" + str(row.get("id", "")),
+            "person_name": "Past observation",
+            "relationship": str(row.get("source", "Camera")),
+            "created_at": str(row.get("observed_at", row.get("created_at", ""))),
+            "note": "Previously observed: " + str(row.get("note", ""))[:1200],
+            "source": str(row.get("model", "Vision analysis")),
+        }))
 
-    for row in list_conversation_turns(limit=200):
+    for row in search_conversation_history(value, limit=100):
         haystack = (
             str(row.get("user_text", "")) + " " + str(row.get("assistant_text", ""))
         ).casefold()
         score = 5 if value.casefold() and value.casefold() in haystack else 0
         score += sum(1 for token in tokens if token in haystack)
-        if score or recall_cue:
-            candidates.append((score, int(row.get("id", 0)), {
-                "id": "conversation-" + str(row.get("id", "")),
-                "person_name": "Past conversation",
-                "relationship": str(row.get("source", "Voice")),
-                "created_at": str(row.get("created_at", "")),
-                "note": (
-                    "You said: " + str(row.get("user_text", ""))[:450]
-                    + " Smriti replied: " + str(row.get("assistant_text", ""))[:650]
-                ),
-                "source": "Conversation log",
-            }))
+        candidates.append((score, int(row.get("id", 0)), {
+            "id": "conversation-" + str(row.get("id", "")),
+            "person_name": "Past conversation",
+            "relationship": str(row.get("source", "Voice")),
+            "created_at": str(row.get("created_at", "")),
+            "note": (
+                "You said: " + str(row.get("user_text", ""))[:450]
+                + " Smriti replied: " + str(row.get("assistant_text", ""))[:650]
+            ),
+            "source": "Conversation log",
+        }))
 
     # Prefer explicit textual matches; for broad recall, newer episodic items still help.
     candidates.sort(key=lambda item: (-item[0], -item[1]))
