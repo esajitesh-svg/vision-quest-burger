@@ -143,9 +143,12 @@ def search_memories(query: str, limit: int = 100) -> list[dict]:
         searchable = person_text + " " + note_text
         score = 5 if needle in searchable else 0
         for token in tokens:
+            # Count both the person-label match and the note-content match. A
+            # note that names the person and answers the query should outrank an
+            # unrelated note attached to that same person.
             if token in person_text:
                 score += 3
-            elif token in note_text:
+            if token in note_text:
                 score += 1
         if score:
             ranked.append((score, index, row))
