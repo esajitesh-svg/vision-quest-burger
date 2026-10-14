@@ -863,28 +863,33 @@ with vision_tab:
                     if latest_observation else 0
                 )
 
-                # Trigger autoplay only once per new utterance/scene result. The
-                # monitor itself refreshes each second, so the persistent replay player
-                # must contain a non-autoplay payload after the initial trigger.
-                speech_html_for_this_refresh = None
+                # Keep the player HTML stable across the one-second fragment refreshes.
+                # It is rebuilt only when a new reply/narration arrives; the browser iframe
+                # keeps speaking and also retains its visible replay/stop controls.
+                previous_reply_sequence = int(
+                    st.session_state.get("live_jarvis_seen_reply_sequence", 0)
+                )
+                reply_is_new = voice_snapshot["reply_sequence"] > previous_reply_sequence
+                latest_observation = current_status.get("latest_observation")
+                previous_observation_sequence = int(
+                    st.session_state.get("live_jarvis_seen_observation_sequence", 0)
+                )
+                observation_sequence = (
+                    int(latest_observation.get("sequence", 0))
+                    if latest_observation else 0
+                )
+
                 if live_voice_enabled and reply_is_new:
                     st.session_state["live_jarvis_seen_reply_sequence"] = voice_snapshot["reply_sequence"]
                     speech_text = voice_snapshot["latest_reply"]
                     speech_language = st.session_state.get("voice_language", "en-IN")
                     speech_rate = float(st.session_state.get("voice_rate", 0.92))
-                    speech_html_for_this_refresh = build_speech_html(
-                        speech_text,
-                        language=speech_language,
-                        rate=speech_rate,
-                        widget_label="🔊 REPLAY JARVIS REPLY",
-                        autoplay=True,
-                    )
                     st.session_state["live_jarvis_speech_html"] = build_speech_html(
                         speech_text,
                         language=speech_language,
                         rate=speech_rate,
                         widget_label="🔊 REPLAY JARVIS REPLY",
-                        autoplay=False,
+                        autoplay=True,
                     )
                     st.session_state["live_jarvis_speech_kind"] = "reply"
                     st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
@@ -898,27 +903,20 @@ with vision_tab:
                 ):
                     st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
                     last_spoken_at = float(st.session_state.get("live_jarvis_last_spoken_at", 0.0))
-                    # Keep camera narration from repeatedly interrupting its own speech.
-                    # User-directed answers always take priority above.
+                    # User-directed answers have priority; do not repeatedly interrupt the
+                    # current narration with another scene summary.
                     narration_cooldown = time.monotonic() - last_spoken_at < 8.0
                     if not voice_snapshot["processing"] and not narration_cooldown:
                         narration_text = latest_observation.get("text", "")
                         try:
                             speech_language = st.session_state.get("voice_language", "en-IN")
                             speech_rate = float(st.session_state.get("voice_rate", 0.92))
-                            speech_html_for_this_refresh = build_speech_html(
-                                narration_text,
-                                language=speech_language,
-                                rate=speech_rate,
-                                widget_label="🔊 REPLAY CAMERA DESCRIPTION",
-                                autoplay=True,
-                            )
                             st.session_state["live_jarvis_speech_html"] = build_speech_html(
                                 narration_text,
                                 language=speech_language,
                                 rate=speech_rate,
                                 widget_label="🔊 REPLAY CAMERA DESCRIPTION",
-                                autoplay=False,
+                                autoplay=True,
                             )
                             st.session_state["live_jarvis_speech_kind"] = "camera narration"
                             st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
@@ -958,10 +956,7 @@ with vision_tab:
                         )
                         if voice_snapshot["used_live_camera"]:
                             st.caption("This reply used a recent live camera frame.")
-                    speech_html = (
-                        speech_html_for_this_refresh
-                        or st.session_state.get("live_jarvis_speech_html", "")
-                    )
+                    speech_html = st.session_state.get("live_jarvis_speech_html", "")
                     if speech_html:
                         st.components.v1.html(speech_html, height=100, scrolling=False)
                     if live_voice_narrate_scenes:
