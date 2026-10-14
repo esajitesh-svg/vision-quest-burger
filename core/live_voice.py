@@ -34,6 +34,7 @@ class LiveVoiceAssistantState:
         self._voiced_samples = 0
 
         self._processing = False
+        self._streaming = False
         self._status = "Microphone off"
         self._error = ""
         self._latest_transcript = ""
@@ -46,6 +47,9 @@ class LiveVoiceAssistantState:
 
     def set_streaming(self, active: bool) -> None:
         with self.lock:
+            if bool(active) == self._streaming:
+                return
+            self._streaming = bool(active)
             if active:
                 if not self._processing and not self._speech_active:
                     self._status = "Microphone active — waiting for speech"
