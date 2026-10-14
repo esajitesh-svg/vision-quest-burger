@@ -10,7 +10,7 @@ from core.cloud_vision import MODE_LABELS, build_prompt, prepare_image, MAX_UPLO
 
 
 def test_every_visible_vision_mode_has_a_grounded_prompt():
-    expected = {"auto_observe", "scene", "objects", "read_text", "accessibility", "visual_question"}
+    expected = {"auto_observe", "scene", "objects", "read_text", "accessibility", "live_companion", "visual_question"}
     assert set(MODE_LABELS) == expected
     for mode in MODE_LABELS:
         prompt = build_prompt(mode)
