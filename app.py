@@ -366,7 +366,7 @@ with vision_tab:
                 "Enable continuous local object detection + bounding boxes",
                 value=True,
                 key="live_object_detection",
-                help="A local OpenCV DNN YOLOX model runs on every frame delivered by the camera stream. Object-detection frames are not sent to an external detection API.",
+                help="Local YOLOX inference runs asynchronously on recent frames at a limited cadence so it does not block the video stream.",
             )
             camera_resolution_label = st.selectbox(
                 "Camera capture / processing resolution",
@@ -600,7 +600,7 @@ with vision_tab:
                     "video": {
                         "width": {"ideal": live_capture_width},
                         "height": {"ideal": live_capture_height},
-                        "frameRate": {"ideal": 15, "max": 20},
+                        "frameRate": {"ideal": 12, "max": 15},
                     },
                     "audio": False,
                 },
@@ -684,7 +684,7 @@ with vision_tab:
                     metric_cols[2].metric("Frame", f"{frame_metrics['width']} × {frame_metrics['height']}")
                     st.caption(f"Latest frame JPEG: {frame_metrics['jpeg_bytes']:,} bytes. Focus is a rough heuristic, not a guarantee of image quality.")
 
-                st.markdown("<div class='cv-workbench-label'>03 / LIVE OBJECT DETECTION · CURRENT-FRAME RESULTS</div>", unsafe_allow_html=True)
+                st.markdown("<div class='cv-workbench-label'>03 / ASYNC OBJECT DETECTION · RECENT RESULTS</div>", unsafe_allow_html=True)
                 detection_status = live_state.detection_snapshot()
                 current_detections = detection_status["detections"] if detection_status["age_seconds"] is not None and detection_status["age_seconds"] <= 1.5 else []
                 inference_ms = frame_metrics.get("detector_ms") if frame_metrics else None
@@ -708,6 +708,8 @@ with vision_tab:
                     st.error("The local YOLOX model is unavailable; no simulated boxes are shown. Check the model-download error above.")
                 elif detection_status["age_seconds"] is None:
                     st.info("Waiting for a live camera frame. Click START in the camera player and allow camera access.")
+                elif detection_status["age_seconds"] is not None and detection_status["age_seconds"] > 1.5:
+                    st.info("The previous detection result expired. Waiting for the next background scan; live video continues.")
                 elif current_detections:
                     st.dataframe(
                         [
@@ -725,7 +727,7 @@ with vision_tab:
                         hide_index=True,
                     )
                     st.caption(
-                        f"{detection_status['model']} · each result comes from local inference on the displayed frame. "
+                        f"{detection_status['model']} · results are produced asynchronously from a recent frame; boxes expire after 1.5 seconds. "
                         "Confidence is a model score, not a guarantee of correctness."
                     )
                 else:
