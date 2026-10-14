@@ -124,7 +124,7 @@ def save_media(
             "tags": clean_tags(tags),
             "metadata": metadata or {},
         }
-        with log.open("a", encoding="utf-8", newline="\\n") as handle:
+        with log.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
     return target
 
