@@ -128,7 +128,7 @@ def search_memories(query: str, limit: int = 100) -> list[dict]:
         return []
 
     tokens = {
-        token for token in re.findall(r"[\\w]+", needle, flags=re.UNICODE)
+        token for token in re.findall(r"[\w]+", needle, flags=re.UNICODE)
         if len(token) > 1 and token not in _MEMORY_QUERY_STOPWORDS
     }
     rows = list_memories(limit=1000)
