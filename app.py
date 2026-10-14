@@ -189,12 +189,38 @@ def run_live_voice_worker(voice_state, live_state, pcm_clip: bytes) -> None:
             image_bytes = live_state.get_latest_analysis_jpeg(max_side=512)
 
         live_status = live_state.get_status()
+        # Pair the fresh camera frame with recent local detections and the latest
+        # natural-language observation. This lets voice answers ground themselves
+        # in both the visible frame and the actual detector output, not memory alone.
+        voice_observation = dict(live_status.get("latest_observation") or {})
+        detection_status = live_state.detection_snapshot()
+        detection_age = detection_status.get("age_seconds")
+        detections_are_recent = (
+            isinstance(detection_age, (int, float)) and detection_age <= 5.0
+        )
+        if detections_are_recent:
+            compact_detections = []
+            for item in detection_status.get("detections", [])[:12]:
+                try:
+                    label = str(item.get("label", "")).strip()[:48]
+                    score = max(0.0, min(1.0, float(item.get("score", 0.0))))
+                except (TypeError, ValueError):
+                    continue
+                if label:
+                    compact_detections.append({
+                        "label": label,
+                        "confidence": round(score, 2),
+                    })
+            voice_observation["object_detections"] = compact_detections
+            voice_observation["object_detection_age_seconds"] = round(float(detection_age), 1)
+            voice_observation["object_detection_model"] = str(detection_status.get("model", ""))[:100]
+            voice_observation.setdefault("mode", "live_camera")
         # Give the assistant the notes most relevant to this utterance rather than
         # the ten newest notes, which may belong to a completely different topic.
         relevant_memories = search_memories(transcript, limit=10)
         reply = answer_voice_query(
             transcript,
-            latest_observation=live_status.get("latest_observation"),
+            latest_observation=voice_observation or None,
             memories=relevant_memories,
             conversation_history=voice_state.history_snapshot(),
             live_image_bytes=image_bytes,
