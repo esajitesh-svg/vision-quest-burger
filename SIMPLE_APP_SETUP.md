@@ -18,8 +18,10 @@ This branch adds a smaller single-screen UI in `simple_app.py`. It uses the exis
 ## Included behavior
 
 - Animated companion orb and a compact single-screen layout.
+- A global DEMO MODE / LIVE MODE selector. Demo Mode uses scripted replies and simulated scene text without making cloud AI requests; it is marked as sample content.
 - Live browser camera feed through WebRTC.
-- Button-triggered visual analysis using the configured vision model.
+- Button-triggered visual analysis using the configured vision model in Live Mode.
+- Consent-based local face enrollment using a chosen reference photo, plus comparison against current camera faces. Unmatched or uncertain faces are labelled Unknown.
 - Browser speech recognition after pressing **ACTIVATE LISTENING**, with typed questions as fallback.
 - Replies use current camera-frame context when available, recent saved activity memories, and recent conversation turns.
 - Browser speech synthesis reads the reply; the component pauses recognition while speaking and resumes the listening cycle.
@@ -29,4 +31,6 @@ This branch adds a smaller single-screen UI in `simple_app.py`. It uses the exis
 
 This is a simplified prototype, not a medical device or a guaranteed always-on background listener. The browser must remain open, permissions must be granted, and the configured Hugging Face services/network must work. Speech recognition availability varies by browser. Camera feed and analysis are separate: analysis runs when requested. The analysis panel shows actual status and observations, not hidden private model reasoning.
 
-The app has not been verified on every browser/device. Test camera, voice recognition, AI response, speech playback, and persistence in the deployment environment before relying on it.
+Face comparison uses an experimental local OpenCV LBPH matcher, is sensitive to lighting and pose, and can misidentify or fail to match people; confirm identity rather than relying on it for consequential decisions. Reference portraits should only be registered with permission. Demo replies and sample observations are not real AI results and should never be treated as stored personal memories.
+
+The app has not been verified on every browser/device. Test camera, voice recognition, AI response, speech playback, face matching, and persistence in the deployment environment before relying on it.
