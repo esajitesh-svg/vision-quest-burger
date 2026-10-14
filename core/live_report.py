@@ -57,6 +57,8 @@ def build_live_report(
             )
         if observation.get("elapsed") is not None:
             lines.append(f"Scene analysis time: {float(observation['elapsed']):.1f} seconds.")
+        if observation.get("timestamp"):
+            lines.append(f"Scene observation timestamp: {observation['timestamp']}.")
     else:
         lines.extend(["", "SCENE ANALYSIS", "The scene explanation has not returned a result yet."])
 
@@ -80,6 +82,9 @@ def build_live_report(
         lines.append("A completed object scan is available.")
         if age_value > 9.0:
             lines.append("The last object scan is stale; wait for a fresh scan before relying on those boxes.")
+        detector_elapsed = status.get("elapsed_seconds")
+        if isinstance(detector_elapsed, (int, float)) and detector_elapsed > 0:
+            lines.append(f"Object-detection inference time: {detector_elapsed:.1f} seconds.")
 
         if detections:
             counts = Counter(str(item.get("label", "object")) for item in detections)
