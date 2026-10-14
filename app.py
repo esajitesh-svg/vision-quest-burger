@@ -847,6 +847,31 @@ with vision_tab:
             def live_monitor_panel():
                 snapshot_jpeg, frame_metrics, frame_count, last_frame_time = live_state.snapshot()
                 is_playing = bool(live_ctx.state.playing)
+                analysis_status = live_state.get_status()
+
+                st.markdown(
+                    "<div class='cv-workbench-label'>03 / LIVE AI ANALYSER</div>",
+                    unsafe_allow_html=True,
+                )
+                if analysis_status["latest_analysis_error"]:
+                    st.error("AI analyser error: " + str(analysis_status["latest_analysis_error"]))
+                elif analysis_status["analysis_busy"]:
+                    st.info("AI analyser is processing the latest camera frame…")
+                elif analysis_status["latest_observation"]:
+                    last_result = analysis_status["latest_observation"]
+                    st.success(
+                        "Last analysis complete · "
+                        + str(last_result.get("model", "vision model"))
+                        + " · "
+                        + str(last_result.get("elapsed", "?"))
+                        + " s"
+                    )
+                elif not is_playing:
+                    st.info("Start the camera to send a frame to the AI analyser.")
+                elif live_auto_analyze:
+                    st.info("Automatic AI analysis is enabled. Waiting for the first result…")
+                else:
+                    st.warning("Automatic AI analysis is off. Click ANALYZE CURRENT FRAME NOW for a one-shot analysis.")
 
                 manual_analyze = st.button(
                     "⚡ ANALYZE CURRENT FRAME NOW",
@@ -861,14 +886,26 @@ with vision_tab:
                 if manual_analyze:
                     sample = live_state.take_analysis_sample(live_interval, force=True, max_side=live_max_side)
                     if sample is None:
-                        st.warning("No fresh frame is ready or the scene analyzer is already busy.")
+                        latest_status = live_state.get_status()
+                        if latest_status["analysis_busy"]:
+                            st.info("The AI analyser is already working on a frame. Wait for the current result.")
+                        elif frame_count <= 0:
+                            st.warning("No camera frames have arrived yet. Start the webcam and wait for the live frame counter.")
+                        else:
+                            st.error("A camera frame arrived, but OpenCV could not prepare it for analysis. Check the processing error below.")
                     else:
-                        Thread(
-                            target=run_live_vision_worker,
-                            args=(live_state, sample, live_mode, live_question, live_max_side),
-                            daemon=True,
-                        ).start()
-                        st.info("Scene analysis started. The live camera and object detector continue while the result is computed.")
+                        try:
+                            Thread(
+                                target=run_live_vision_worker,
+                                args=(live_state, sample, live_mode, live_question, live_max_side),
+                                daemon=True,
+                            ).start()
+                            st.info("AI analysis started. Keep this tab open; the result appears below when the model responds.")
+                        except Exception as exc:
+                            live_state.finish_analysis(
+                                error=f"Could not start the analysis worker: {type(exc).__name__}: {exc}"
+                            )
+                            st.error("Could not start AI analysis: " + f"{type(exc).__name__}: {exc}")
                 elif is_playing and (
                     live_auto_analyze
                     or (live_voice_enabled and live_voice_narrate_scenes)
@@ -1131,8 +1168,6 @@ with vision_tab:
 
                 if current_status["latest_analysis_error"]:
                     st.error(f"Live processing/analysis notice: {current_status['latest_analysis_error']}")
-                elif current_status["analysis_busy"]:
-                    st.info("AI analysis is in progress. Additional frames are skipped until it finishes.")
 
                 record_col, stop_col = st.columns(2)
                 with record_col:
