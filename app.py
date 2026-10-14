@@ -26,7 +26,7 @@ import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
 from streamlit_webrtc import VideoHTMLAttributes, WebRtcMode, webrtc_streamer
 
-from core.cloud_db import (init_db, list_people, list_memories, save_person, save_memory, search_memories, search_memories_for_voice, search_activity_for_voice, save_conversation_turn, list_conversation_turns, save_observation, list_observations, save_person_portrait, get_person_portrait, export_memories_csv, export_activity_csv, has_durable_database)
+from core.cloud_db import (init_db, list_people, list_memories, save_person, save_memory, search_memories, search_memories_for_voice, search_activity_for_voice, save_conversation_turn, list_conversation_turns, save_observation, list_observations, save_person_portrait, get_person_portrait, delete_person_portrait, export_memories_csv, export_activity_csv, has_durable_database)
 from core.cloud_vision import MODE_LABELS, analyze_image, model_status, prepare_image
 from core.realtime_detector import REALTIME_DETECTOR_LABEL, RealtimeYOLOXDetector
 from core.live_report import build_live_report
@@ -1425,6 +1425,60 @@ with people_tab:
     current_people = list_people()
     if current_people:
         st.dataframe([{"Name": p["name"], "Label": p["relationship"], "Notes": p["notes"], "Added": p["created_at"]} for p in current_people], use_container_width=True, hide_index=True)
+        st.markdown("### Consent-based portrait memory")
+        st.caption(
+            "Save a portrait supplied by you, attached to a named profile for human reference. "
+            "Smriti does not match faces or infer identity from a camera image; confirm a person's name yourself. "
+            "Portrait files are stored in the configured database and can be removed below."
+        )
+        portrait_labels = {p["id"]: f'{p["name"]} — {p["relationship"]}' for p in current_people}
+        portrait_person_id = st.selectbox(
+            "Profile for reference portrait",
+            list(portrait_labels),
+            format_func=lambda pid: portrait_labels[pid],
+            key="portrait_profile_id",
+        )
+        portrait_file = st.file_uploader(
+            "Choose a portrait (JPEG, PNG, WEBP; 3 MB maximum)",
+            type=["jpg", "jpeg", "png", "webp"],
+            key="person_portrait_upload",
+        )
+        portrait_consent = st.checkbox(
+            "I have permission to store this person's portrait in this profile.",
+            key="portrait_storage_consent",
+        )
+        if st.button("Save consented portrait", key="save_person_portrait_button", type="primary"):
+            if not portrait_consent:
+                st.warning("Confirm permission before storing a portrait.")
+            elif portrait_file is None:
+                st.warning("Choose an image first.")
+            else:
+                mime = portrait_file.type or {
+                    "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "png": "image/png", "webp": "image/webp",
+                }.get(portrait_file.name.rsplit(".", 1)[-1].lower(), "")
+                try:
+                    save_person_portrait(portrait_person_id, portrait_file.getvalue(), mime)
+                    st.success("Reference portrait saved to the selected profile.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Portrait could not be saved: {exc}")
+        existing_portrait = get_person_portrait(portrait_person_id)
+        if existing_portrait:
+            st.image(
+                bytes(existing_portrait["image_data"]),
+                caption=f"Reference portrait · {portrait_labels[portrait_person_id]} · updated {existing_portrait['updated_at']}",
+                width=240,
+            )
+            if st.button("Remove stored portrait", key="remove_person_portrait_button"):
+                try:
+                    delete_person_portrait(portrait_person_id)
+                    st.success("Portrait removed from the configured database.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Portrait could not be removed: {exc}")
+        else:
+            st.caption("No portrait is stored for this profile.")
     else:
         st.info("No people added yet.")
 
@@ -1525,8 +1579,16 @@ with voice_tab:
                                 max_side=512,
                             )
                             voice_frame_reserved = live_image_bytes is not None
-                    recent_memory_context = list_memories(limit=10)
+                    recent_memory_context = search_activity_for_voice(transcript, limit=10)
                     prior_turns = st.session_state.get("voice_chat_history", [])[-4:]
+                    if not prior_turns:
+                        try:
+                            prior_turns = [
+                                {"question": str(row.get("user_text", "")), "reply": str(row.get("assistant_text", ""))}
+                                for row in reversed(list_conversation_turns(limit=4))
+                            ]
+                        except Exception:
+                            prior_turns = []
                     reply = answer_voice_query(
                         transcript,
                         latest_observation=live_context,
@@ -1537,6 +1599,18 @@ with voice_tab:
                 st.session_state["voice_latest_transcript"] = transcript
                 st.session_state["voice_latest_reply"] = reply
                 st.session_state["voice_latest_used_live_camera"] = live_image_bytes is not None
+                try:
+                    save_conversation_turn(
+                        transcript,
+                        reply,
+                        source="VOICE I/O recording",
+                        used_live_camera=live_image_bytes is not None,
+                    )
+                except Exception as storage_exc:
+                    st.warning(
+                        "Reply generated, but the conversation was not saved to long-term memory: "
+                        + f"{type(storage_exc).__name__}: {storage_exc}"
+                    )
                 st.session_state["voice_auto_speak_pending"] = bool(auto_speak_reply)
                 history = st.session_state.get("voice_chat_history", [])
                 history.append({"question": transcript, "reply": reply})
@@ -1647,6 +1721,70 @@ with voice_tab:
     else:
         st.info("Enter text or load an observation or saved note. Then tap Speak text in the player.")
     st.caption("Tip: Chrome and Edge generally have broad Web Speech API support. Available voices are provided by your device/browser and can differ by language. Spoken replies require a click on Speak reply.")
+
+with activity_tab:
+    st.subheader("Long-term activity memory")
+    st.write(
+        "This log stores completed voice turns and text summaries of scenes that were analyzed. "
+        "It does not store continuous camera video or raw microphone audio."
+    )
+    if has_durable_database():
+        st.success("Managed PostgreSQL is configured for persistence across normal app restarts.")
+    else:
+        st.warning(
+            "The current log is in local SQLite and may be lost when the hosting instance is reset. "
+            "Set DATABASE_URL in hosting Secrets to use managed PostgreSQL for durable storage."
+        )
+
+    try:
+        activity_turns = list_conversation_turns(limit=250)
+        activity_observations = list_observations(limit=250)
+        left_count, right_count = st.columns(2)
+        left_count.metric("Saved conversation turns", len(activity_turns))
+        right_count.metric("Saved observations", len(activity_observations))
+
+        export_data = export_activity_csv()
+        st.download_button(
+            "⬇ Export activity backup (CSV)",
+            data=export_data,
+            file_name="smriti_activity_backup.csv",
+            mime="text/csv",
+            type="primary",
+            key="export_activity_backup",
+            help="Download saved conversation text and scene summaries so you can keep an independent backup.",
+        )
+
+        conversation_rows = [
+            {
+                "Saved at": row.get("created_at", ""),
+                "Source": row.get("source", ""),
+                "You said": row.get("user_text", ""),
+                "Smriti replied": row.get("assistant_text", ""),
+                "Live camera used": bool(row.get("used_live_camera")),
+            }
+            for row in activity_turns
+        ]
+        observation_rows = [
+            {
+                "Observed at": row.get("observed_at", row.get("created_at", "")),
+                "Source": row.get("source", ""),
+                "Model": row.get("model", ""),
+                "Summary": row.get("note", ""),
+            }
+            for row in activity_observations
+        ]
+        with st.expander("Recent conversation history", expanded=True):
+            if conversation_rows:
+                st.dataframe(conversation_rows, use_container_width=True, hide_index=True)
+            else:
+                st.info("No conversation turns have been saved yet.")
+        with st.expander("Recent scene observations and analyses", expanded=True):
+            if observation_rows:
+                st.dataframe(observation_rows, use_container_width=True, hide_index=True)
+            else:
+                st.info("No completed live observations have been saved yet.")
+    except Exception as exc:
+        st.error(f"Activity memory is not available: {type(exc).__name__}: {exc}")
 
 with search_tab:
     st.subheader("Search saved memories")
