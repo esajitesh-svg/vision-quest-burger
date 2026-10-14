@@ -20,7 +20,7 @@ import numpy as np
 MAX_RECORD_SECONDS = 60
 MAX_VIDEO_BYTES = 25 * 1024 * 1024
 RECORD_FPS = 8.0
-MAX_FRAME_EDGE = 640
+MAX_FRAME_EDGE = 1920
 
 
 def process_live_frame(frame_bgr: np.ndarray, max_side: int = MAX_FRAME_EDGE, enhance: bool = False):
@@ -52,7 +52,7 @@ def process_live_frame(frame_bgr: np.ndarray, max_side: int = MAX_FRAME_EDGE, en
         l_channel = clahe.apply(l_channel)
         frame = cv2.cvtColor(cv2.merge((l_channel, a_channel, b_channel)), cv2.COLOR_LAB2BGR)
 
-    ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+    ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
     if not ok:
         raise RuntimeError("OpenCV could not encode this camera frame.")
     height, width = frame.shape[:2]
