@@ -67,11 +67,11 @@ class ObserverState:
   self.error = ""
   self.elapsed_seconds = 0.0
 
-def run_observer_worker(state, image_bytes):
+def run_observer_worker(state, image_bytes, max_side):
  """Generate one Granite scene observation without blocking Streamlit's UI."""
  started = time.perf_counter()
  try:
-  result = analyze_with_granite(image_bytes, mode="auto_observe", max_side=512)
+  result = analyze_with_granite(image_bytes, mode="auto_observe", max_side=max_side)
   time_label = datetime.now().strftime("%H:%M:%S")
   status = f"OBSERVER COMPLETE · {result.elapsed_seconds:.1f}s"
   error = ""
@@ -248,9 +248,9 @@ with r:
   media_stream_constraints={
    "video":{
     "facingMode":"user",
-    "width":{"ideal":640,"max":1280},
-    "height":{"ideal":480,"max":720},
-    "frameRate":{"ideal":15,"max":20},
+    "width":{"ideal":960,"max":1280},
+    "height":{"ideal":540,"max":720},
+    "frameRate":{"ideal":20,"max":24},
    },
    "audio":False,
   },
@@ -268,7 +268,14 @@ with r:
 @st.fragment(run_every=1)
 def render_live_observer():
  with st.expander("05 / LIVE OBSERVER // GRANITE VISION", expanded=True):
-  st.caption("Automatic observation checks for a new frame every second. Granite runs in a background worker; if inference takes longer than one second, new frames are skipped until it finishes instead of building a backlog.")
+  st.caption("Camera input now requests up to 960×540 for clearer detail. Granite runs in the background and skips overlapping requests, so the UI stays responsive when inference takes longer than one second.")
+  detail_label = st.selectbox(
+   "Observation detail / speed",
+   ["Fast · 512 px","Balanced · 640 px","Higher detail · 768 px"],
+   index=1,
+   key="smriti_observer_detail",
+  )
+  detail_side = 512 if detail_label.startswith("Fast") else (768 if detail_label.startswith("Higher") else 640)
   auto_observe = st.checkbox("Enable automatic observation every second", value=True, key="smriti_auto_observer")
   run_now = st.button("OBSERVE CURRENT FRAME NOW", use_container_width=True, key="smriti_observe_now")
   now = time.monotonic()
@@ -288,7 +295,7 @@ def render_live_observer():
    if frame is None or frame_age > 5.0:
     st.info("Waiting for a fresh webcam frame. Start the camera and leave the feed running.")
    else:
-    ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+    ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 84])
     if not ok:
      st.error("OpenCV could not encode the current camera frame.")
     else:
@@ -303,7 +310,7 @@ def render_live_observer():
       try:
        threading.Thread(
         target=run_observer_worker,
-        args=(observer_state, encoded.tobytes()),
+        args=(observer_state, encoded.tobytes(), detail_side),
         daemon=True,
         name="smriti-live-observer",
        ).start()
