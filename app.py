@@ -26,6 +26,7 @@ from streamlit_webrtc import WebRtcMode, webrtc_streamer
 from core.cloud_db import init_db, list_people, list_memories, save_person, save_memory, search_memories, export_memories_csv
 from core.cloud_vision import MODE_LABELS, analyze_image, model_status, prepare_image
 from core.cloud_detection import OBJECT_DETECTION_MODEL, detect_objects
+from core.live_report import build_live_report
 from core.cloud_cv import process_image_opencv
 from core.cloud_live import LiveMonitorState, process_live_frame, draw_detection_overlay
 from core.voice import SUPPORTED_LANGUAGES, build_speech_html
@@ -658,10 +659,11 @@ with vision_tab:
                         st.rerun(scope="app")
 
                 observation = current_status["latest_observation"]
+                detection_status = live_state.detection_snapshot()
                 if observation and st.session_state.get("live_result_sequence") != observation["sequence"]:
                     st.session_state["latest_result"] = {
                         "text": observation["text"],
-                        "mode": f"Live · {observation['mode']}",
+                        "mode": f"Live · {live_mode}",
                         "model": observation["model"],
                         "elapsed": observation["elapsed"],
                         "timestamp": observation["timestamp"],
@@ -669,27 +671,67 @@ with vision_tab:
                         "origin": "live",
                     }
                     st.session_state["live_result_sequence"] = observation["sequence"]
-                if observation:
-                    st.subheader("Latest live AI observation")
-                    st.markdown(f"<div class='result'>{escape(observation['text'])}</div>", unsafe_allow_html=True)
-                    st.caption(
-                        f"{observation['mode']} · {observation['model']} · "
-                        f"{observation['elapsed']:.1f}s · {observation['timestamp']}"
+
+                live_report = build_live_report(
+                    observation,
+                    detection_status,
+                    frame_metrics,
+                    current_status.get("frame_count", 0),
+                )
+                report_available = bool(
+                    observation
+                    or detection_status.get("age_seconds") is not None
+                    or current_status.get("frame_count", 0)
+                )
+                st.markdown(
+                    "<div class='cv-workbench-label'>04 / COMPLETE OBSERVATION · ANALYSIS · SPOKEN REPORT</div>",
+                    unsafe_allow_html=True,
+                )
+                if report_available:
+                    st.markdown("<div class='cv-feed-heading'>WHAT VISIONQUEST CURRENTLY SEES</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='result'>{escape(live_report)}</div>", unsafe_allow_html=True)
+
+                    # The live report can include changing brightness and frame count every
+                    # second. Keep spoken text stable between actual model-result changes,
+                    # so the browser speech player is not recreated on every UI refresh.
+                    speech_detection_status = dict(detection_status)
+                    speech_detection_status["busy"] = False
+                    if speech_detection_status.get("age_seconds") is not None:
+                        speech_detection_status["age_seconds"] = (
+                            10.0 if float(speech_detection_status["age_seconds"]) > 9.0 else 0.0
+                        )
+                    speech_metrics = {
+                        key: frame_metrics[key]
+                        for key in ("width", "height")
+                        if frame_metrics and key in frame_metrics
+                    }
+                    speech_report = build_live_report(
+                        observation,
+                        speech_detection_status,
+                        speech_metrics,
+                        frame_count=0,
                     )
                     st.components.v1.html(
                         build_speech_html(
-                            observation["text"],
+                            speech_report,
                             language=st.session_state.get("voice_language", "en-IN"),
                             rate=float(st.session_state.get("voice_rate", 0.92)),
-                            widget_label="🔊 PRONOUNCE OBSERVATION",
+                            widget_label="🔊 SPEAK FULL LIVE REPORT",
                         ),
                         height=92,
                         scrolling=False,
                     )
-                    if st.button("Load observation into Voice tab", key="live_to_voice"):
-                        st.session_state["voice_text"] = observation["text"]
+                    if st.button("Load full analysis into Voice tab", key="live_report_to_voice"):
+                        st.session_state["voice_text"] = live_report
                         st.rerun(scope="app")
+                else:
+                    st.info("Start the camera stream to see the live scene report, object inventory, confidence scores, and OpenCV frame measurements.")
 
+                if observation:
+                    st.caption(
+                        f"Latest scene-model result · {observation['model']} · "
+                        f"{observation['elapsed']:.1f}s · {observation['timestamp']}"
+                    )
                     current_people = list_people()
                     if current_people:
                         names = {p["id"]: f'{p["name"]} — {p["relationship"]}' for p in current_people}
