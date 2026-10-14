@@ -128,6 +128,23 @@ def render_cv_view(
     return display
 
 
+def run_local_detector_worker(live_state, detector, frame_bgr, confidence_threshold: float) -> None:
+    """Run local detection in the background so inference never blocks video delivery."""
+    try:
+        result = detector.detect(
+            frame_bgr,
+            confidence_threshold=confidence_threshold,
+            max_detections=30,
+        )
+        live_state.finish_detection(
+            detections=result.detections,
+            model=REALTIME_DETECTOR_LABEL,
+            elapsed_seconds=result.elapsed_seconds,
+        )
+    except Exception as exc:
+        live_state.finish_detection(error=f"{type(exc).__name__}: {exc}")
+
+
 def run_live_vision_worker(live_state, sample_bytes: bytes, mode: str, question: str, max_side: int) -> None:
     """Run remote scene understanding off the Streamlit/UI thread."""
     try:
@@ -335,8 +352,8 @@ with vision_tab:
 
     with live_tab:
         st.markdown("<div class='cv-workbench-label'>01 / LIVE SENSOR INPUT · WEBCAM</div><div class='cv-feed-heading'>LIVE OPTICAL FEED // REAL-TIME CV PIPELINE</div>", unsafe_allow_html=True)
-        st.write("VisionQuest runs local OpenCV DNN object detection on every frame delivered by the live camera stream, drawing current-frame boxes and confidence labels. A separate hosted vision-language model explains sampled scenes. Object inference runs on the app host, so detections do not depend on per-frame API calls; available frame rate depends on the server CPU.")
-        st.caption("Camera video is sent to the hosted app for processing. Capture target defaults to Full HD 1920×1080 with higher JPEG quality; the browser may negotiate lower based on camera/device/network. Full HD uses more bandwidth and CPU. Object detection is local to the app server; only scene-explanation samples use the external vision-language provider. Silent recording is optional (up to 60 seconds / 25 MB). Use consented test scenes.")
+        st.write("VisionQuest prioritizes a responsive live video feed. Local OpenCV DNN object detection runs asynchronously on a recent frame instead of blocking every video frame; boxes update periodically and disappear when too old. A separate hosted vision-language model explains sampled scenes.")
+        st.caption("Camera video is sent to the hosted app for processing. The default HD 1280×720 capture balances detail and latency; Full HD remains selectable. Local object detection runs asynchronously at a limited cadence so it does not hold up the video callback. Only scene-explanation samples use the external vision-language provider. Use consented test scenes.")
         with st.expander("⚙️ PERCEPTION / CAMERA CONTROLS", expanded=False):
             live_auto_analyze = st.checkbox(
                 "Enable automatic scene explanation",
@@ -358,9 +375,9 @@ with vision_tab:
                     "HD · 1280 × 720",
                     "Standard · 640 × 360",
                 ],
-                index=0,
+                index=1,
                 key="live_camera_resolution",
-                help="Requests this resolution from the browser camera and processes the image at up to the selected long-edge size. The device/browser may negotiate a lower actual resolution, and Full HD uses more bandwidth/CPU.",
+                help="Defaults to HD for a smoother cloud stream. Full HD is available, but uses more upload bandwidth and server CPU; the device/browser may negotiate a lower actual resolution.",
             )
             if camera_resolution_label.startswith("Full HD"):
                 live_capture_width, live_capture_height, live_processing_max_side = 1920, 1080, 1920
@@ -383,10 +400,10 @@ with vision_tab:
             live_interval = st.select_slider(
                 "Scene explanation target interval",
                 options=[1, 2, 5, 10],
-                value=1,
+                value=5,
                 key="live_interval_seconds",
                 format_func=lambda x: "Every 1 second" if x == 1 else f"Every {x} seconds",
-                help="Only the written scene-analysis model is sampled. Its actual cadence depends on provider latency.",
+                help="Defaults to every 5 seconds to reduce remote inference load. Its actual cadence depends on provider latency.",
             )
             live_mode_label = st.selectbox(
                 "Scene analysis task",
@@ -410,9 +427,9 @@ with vision_tab:
                     "Balanced · 768 px",
                     "Maximum detail · 1280 px",
                 ],
-                index=2,
+                index=1,
                 key="live_detail",
-                help="Higher detail gives the scene model more image evidence for small objects and readable text, but takes longer and may use more inference credits.",
+                help="Balanced is the recommended speed/detail trade-off. Maximum detail is slower and best reserved for still frames or fine text.",
             )
             if live_detail.startswith("Fast"):
                 live_max_side = 512
@@ -482,30 +499,52 @@ with vision_tab:
                 processed_bgr, analysis_jpeg, metrics = process_live_frame(
                     frame_bgr, max_side=live_processing_max_side, enhance=live_enhance
                 )
-                detections = []
-                detector_result = None
                 if live_object_detection and realtime_detector is not None:
-                    try:
-                        detector_result = realtime_detector.detect(
-                            processed_bgr,
-                            confidence_threshold=detection_threshold,
-                            max_detections=30,
-                        )
-                        detections = detector_result.detections
-                        metrics["detector_fps"] = detector_result.fps
-                        metrics["detector_ms"] = round(detector_result.elapsed_seconds * 1000.0, 1)
-                        live_state.finish_detection(
-                            detections=detections,
-                            model=REALTIME_DETECTOR_LABEL,
-                            elapsed_seconds=detector_result.elapsed_seconds,
-                        )
-                    except Exception as exc:
-                        metrics["detector_fps"] = 0.0
-                        metrics["detector_ms"] = None
-                        live_state.finish_detection(error=f"{type(exc).__name__}: {exc}")
-                else:
-                    metrics["detector_fps"] = 0.0
-                    metrics["detector_ms"] = None
+                    # Reserve at most one inference task and skip new frames while it is
+                    # busy. The expensive neural-network call runs on a daemon worker,
+                    # never inside WebRTC's frame callback.
+                    if live_state.reserve_live_detection(interval_seconds=0.6):
+                        try:
+                            Thread(
+                                target=run_local_detector_worker,
+                                args=(
+                                    live_state,
+                                    realtime_detector,
+                                    processed_bgr.copy(),
+                                    detection_threshold,
+                                ),
+                                daemon=True,
+                            ).start()
+                        except Exception as exc:
+                            live_state.finish_detection(
+                                error=f"Could not start the detector worker: {type(exc).__name__}: {exc}"
+                            )
+
+                detection_status = live_state.detection_snapshot()
+                detection_age = detection_status.get("age_seconds")
+                detection_fresh = (
+                    live_object_detection
+                    and realtime_detector is not None
+                    and detection_age is not None
+                    and detection_age <= 1.5
+                )
+                detections = detection_status["detections"] if detection_fresh else []
+                elapsed_detection = detection_status.get("elapsed_seconds")
+                metrics["detector_ms"] = (
+                    round(float(elapsed_detection) * 1000.0, 1)
+                    if isinstance(elapsed_detection, (int, float)) and elapsed_detection > 0
+                    else None
+                )
+                metrics["detector_fps"] = (
+                    round(1.0 / max(float(elapsed_detection), 0.001), 2)
+                    if isinstance(elapsed_detection, (int, float)) and elapsed_detection > 0
+                    else 0.0
+                )
+                metrics["detector_age_ms"] = (
+                    round(float(detection_age) * 1000.0, 1)
+                    if detection_age is not None else None
+                )
+                metrics["detector_busy"] = bool(detection_status.get("busy"))
 
                 display_bgr = render_cv_view(
                     processed_bgr,
@@ -515,22 +554,29 @@ with vision_tab:
                     frame_count=live_state.frame_count + 1,
                 )
                 if detections:
-                    # Boxes are computed for this exact frame, so there is no stale overlay.
-                    display_bgr = draw_detection_overlay(display_bgr, detections, age_seconds=0.0)
-
-                if live_object_detection and detector_result is not None:
-                    telemetry = (
-                        f"YOLOX LIVE  {detector_result.fps:.1f} FPS  |  "
-                        f"{detector_result.elapsed_seconds * 1000.0:.0f} ms"
+                    # Detection is asynchronous; overlay only results that are recent.
+                    display_bgr = draw_detection_overlay(
+                        display_bgr,
+                        detections,
+                        age_seconds=float(detection_age),
+                        max_age_seconds=1.5,
                     )
+
+                if live_object_detection and realtime_detector is not None:
+                    if isinstance(detection_age, (int, float)) and detection_age <= 1.5 and metrics["detector_ms"] is not None:
+                        telemetry = f"YOLOX ASYNC  {metrics['detector_ms']:.0f} ms  |  AGE {detection_age:.1f}s"
+                    elif detection_status.get("busy"):
+                        telemetry = "YOLOX ASYNC  SCANNING"
+                    else:
+                        telemetry = "YOLOX ASYNC  WAITING"
                     cv2.putText(
                         display_bgr, telemetry,
-                        (max(10, display_bgr.shape[1] - 300), 21),
+                        (max(10, display_bgr.shape[1] - 340), 21),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.42, (100, 255, 180), 1, cv2.LINE_AA,
                     )
 
                 ok, display_encoded = cv2.imencode(
-                    ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 94]
+                    ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 90]
                 )
                 display_jpeg = display_encoded.tobytes() if ok else analysis_jpeg
                 # The live view and recording use the annotated frame; scene-analysis
@@ -640,7 +686,7 @@ with vision_tab:
 
                 st.markdown("<div class='cv-workbench-label'>03 / LIVE OBJECT DETECTION · CURRENT-FRAME RESULTS</div>", unsafe_allow_html=True)
                 detection_status = live_state.detection_snapshot()
-                current_detections = detection_status["detections"]
+                current_detections = detection_status["detections"] if detection_status["age_seconds"] is not None and detection_status["age_seconds"] <= 1.5 else []
                 inference_ms = frame_metrics.get("detector_ms") if frame_metrics else None
                 inference_fps = frame_metrics.get("detector_fps") if frame_metrics else None
                 detector_cols = st.columns(3, gap="small")
@@ -652,7 +698,7 @@ with vision_tab:
                 detector_cols[2].metric(
                     "Inference / frame",
                     f"{inference_ms:.0f} ms" if isinstance(inference_ms, (int, float)) else "—",
-                    f"{inference_fps:.1f} detections/s" if isinstance(inference_fps, (int, float)) and inference_fps > 0 else None,
+                    f"Result age {detection_status['age_seconds']:.1f}s" if isinstance(detection_status.get("age_seconds"), (int, float)) else "Waiting for first result",
                 )
                 if detection_status["error"]:
                     st.warning(f"Local object detector notice: {detection_status['error']}")
