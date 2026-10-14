@@ -8,7 +8,7 @@ This is a **cloud-deployment edition** of VisionQuest. The compact ONNX object d
 
 - Still photos use browser camera capture (`st.camera_input`) or image upload. The **Live camera & recording** tab uses WebRTC to stream the visitor's camera to the cloud server; OpenCV processes frames on the server. It does not use `cv2.VideoCapture(0)` to access a remote visitor's webcam.
 - The **Live camera** tab uses WebRTC to send the browser camera stream to the app server; it does not use `cv2.VideoCapture(0)` to access the visitor's camera. The selectable capture targets are Standard 640 × 360 (default), HD 1280 × 720, and Full HD 1920 × 1080. These are requested/processing targets, not a guarantee that the physical camera will negotiate the same resolution; use the visible frame dimensions to see what is being processed. After **START** and browser permission, the local OpenCV DNN YOLOX model is initially off and can be enabled in camera controls. When enabled it runs in a background worker on a recent copied frame instead of blocking each video callback. Results are periodically refreshed and boxes expire after 1.5 seconds; this trades exact frame-by-frame alignment for smoother video. It recognises the 80 common COCO categories, not every possible object or a person's identity. Actual throughput is shown as measured FPS/inference time and depends on the server CPU; it may be slower than the camera capture rate. Scene explanation is a separate, sampled task using the hosted vision-language model.
-- WebRTC requires HTTPS and network access to STUN/TURN. The app configures a public STUN server by default. If a device/network cannot connect, configure `TURN_SERVER_URL`, `TURN_USERNAME`, and `TURN_CREDENTIAL` in Streamlit Secrets with credentials from a TURN provider. Audio is not recorded.
+- WebRTC requires HTTPS and network access to STUN/TURN. The app configures a public STUN server by default. If a device/network cannot connect, configure `TURN_SERVER_URL`, `TURN_USERNAME`, and `TURN_CREDENTIAL` in Streamlit Secrets with credentials from a TURN provider. The live video pipeline does not record audio. Voice questions are separate, user-initiated microphone clips and are sent to the configured speech-recognition provider only when submitted.
 - Add both `APP_PASSWORD` and `HF_TOKEN` in Streamlit's Secrets. `HF_TOKEN` must have Inference Providers permission. Keep all tokens out of the source and repository. The hosted inference provider may consume your Hugging Face monthly credits and can be subject to rate limits or paid usage; check the current pricing/usage page before using it.
 - The demo vault is a single shared SQLite database on the app host and is protected by one app password. Anyone with that password can see and export the same demo records.
 - The default Streamlit Community Cloud filesystem should not be treated as durable storage. A restart/redeploy can cause database loss. Do not store real medical or sensitive personal information. Use fictional demo records only.
@@ -66,15 +66,18 @@ The webpage cannot silently start the camera without a user gesture and browser 
 - The separate vision-language model can run automatic scene explanation at a 5-second target interval by default (1/2/10-second settings are available when enabled). This is not guaranteed to complete every second because remote inference has variable latency. Its frames are sent to the configured provider.
 - Silent MP4 recording captures the displayed CV view, up to 60 seconds or 25 MB. Recordings are temporary and offered for download after stop.
 
-## Voice module (browser text-to-speech)
+## Voice conversation + speech
 
-The **Voice** tab adds read-aloud controls for the latest visual observation, saved memory notes, or text typed by the user. A small inline browser player provides **Speak**, **Stop**, and a speaking-speed slider. The user can choose English (India), English (US), English (UK), Hindi, or Tamil. The browser selects the closest installed device voice; supported voices vary by browser and operating system.
+The **VOICE I/O** tab supports push-to-talk conversation. Record a short question with the browser microphone, press **LISTEN & REPLY**, then read the transcript and the model's answer on screen. Tap **SPEAK REPLY** to hear it with the browser's built-in speech synthesis. The app is not always listening: it only submits audio after the user records a clip and presses the button.
 
-- Speech is generated on the visitor's device using the browser Web Speech API. No new Python package or external TTS API key is required.
-- The text to be spoken remains in the already-loaded page; the voice module does not send it to a separate TTS provider or save an audio file.
-- The user must tap **Speak**; the app does not autoplay speech. Use **Stop** to cancel speech.
-- Current Chrome and Edge generally support browser speech synthesis. If it is unavailable, check the browser/device's speech capabilities and volume.
-- This feature is text-to-speech only. Speech recognition/transcription from a microphone is not included in this cloud build.
+- Speech-to-text uses Hugging Face Inference Providers with Whisper large-v3. The selected audio clip is uploaded to that provider for transcription; it is not written into the app's memory database.
+- The spoken question and bounded context from the latest completed visual observation plus up to 10 recent saved notes are sent to the configured hosted vision-language model for a short reply. Replies should stick to the supplied context and say when information is missing.
+- Speech playback uses the device/browser's available voices. No separate text-to-speech API key is required, and playback starts only after the user presses **SPEAK REPLY**.
+- For low latency, this is push-to-talk rather than streaming audio. Speech recognition and cloud-model responses depend on network, provider availability, and credits/rate limits. Use fictional profiles and consented test scenes, not sensitive personal or medical data.
+
+## Live auto-storing of summaries
+
+In **PERCEPTION / CAMERA CONTROLS**, explicitly enable both **automatic scene explanation** and **auto-save new scene summaries to memory**. Choose the demo profile under which the summaries should be saved and choose a minimum save interval (30, 60, or 120 seconds). Each completed model observation is saved as text to the shared memory vault, no more frequently than the chosen interval. The feature does not save every camera frame or store the video; raw camera video recording remains a separate, temporary MP4 feature. Auto-storage is off by default and should only be used with a profile and scenes that the operator has permission to use.
 
 ## Security and data
 
