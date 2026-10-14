@@ -1,5 +1,5 @@
 """Minimal functional Smriti AI UI: camera, scene analysis, Q&A and spoken replies."""
-import hashlib, html, threading, time
+import base64, hashlib, html, os, threading, time, uuid
 from datetime import datetime
 import av, cv2, streamlit as st
 from pathlib import Path
@@ -17,6 +17,7 @@ from core.face_recognition import (
 )
 from core.voice import build_speech_html
 from core.demo_mode import render_demo_hub
+from core.local_archive import get_archive_dir, archive_event, save_media, write_text_export
 
 st.set_page_config(page_title="Smriti AI",page_icon="✦",layout="wide",initial_sidebar_state="collapsed")
 
@@ -27,6 +28,30 @@ experience_mode = st.radio(
     key="experience_mode",
     help="Demo Mode uses scripted sample replies without cloud AI requests; face matching runs locally when available.",
 )
+
+with st.expander("LOCAL MEMORY + CAPTURE ARCHIVE", expanded=True):
+    st.caption("Automatic text memory is local. Audio and video clips are recorded only when you explicitly press their recording buttons; this app does not secretly record people.")
+    st.checkbox("Automatically save observations, detected objects, and conversation text", value=True, key="archive_auto_save")
+    st.checkbox("Save a camera still with each completed live observation", value=True, key="archive_save_observation_frames")
+    st.text_input("People / names (manual labels only)", key="archive_people_tags", placeholder="Names you have permission to record")
+    st.text_input("Place / location label (entered manually)", key="archive_place_tag", placeholder="e.g. home, school, garden")
+    st.text_input("Activity / context", key="archive_activity_tag", placeholder="e.g. reading, gardening, meeting")
+    try:
+        archive_root = get_archive_dir()
+        st.caption(f"Local archive folder: {archive_root}")
+        activity_log_path = archive_root / "activity.jsonl"
+        if activity_log_path.is_file():
+            st.download_button("Download local activity log", activity_log_path.read_bytes(), file_name="smriti_activity.jsonl", mime="application/x-ndjson", key="download_local_activity_log")
+    except Exception as archive_exc:
+        st.warning(f"Local archive is unavailable: {type(archive_exc).__name__}: {archive_exc}")
+
+def current_archive_tags():
+    return {
+        "people": st.session_state.get("archive_people_tags", ""),
+        "place": st.session_state.get("archive_place_tag", ""),
+        "activity": st.session_state.get("archive_activity_tag", ""),
+    }
+
 if experience_mode == "Demo Mode":
     render_demo_hub()
     st.stop()
