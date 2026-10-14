@@ -185,11 +185,11 @@ with vision_tab:
     with live_tab:
         st.markdown("<div class='hud-label'>Primary visual interface // live sensing</div><div class='hud-rule'></div>", unsafe_allow_html=True)
         st.subheader("LIVE OPTICAL FEED")
-        st.write("OpenCV can process every incoming camera frame continuously. Auto-observe sends sampled frames to the hosted vision model to describe the scene, visible objects, approximate positions, activities, and readable text.")
+        st.write("OpenCV processes every incoming camera frame continuously. Auto-observe is set to request AI analysis every second, describing the scene, visible objects and approximate positions, activities, and readable text. If a remote AI request takes longer than a second, the app waits for it to finish before sending the next one.")
         st.warning("Live video is streamed to the app host. Frames sent for AI analysis are forwarded to an external inference provider. Recording is silent video only, limited to 60 seconds / 25 MB, and downloadable after stopping. Use consented fictional scenes only.")
         live_auto_analyze = st.checkbox("Enable always-on AI auto-observation", value=bool(status[0]), disabled=not status[0], key="live_auto_observe_always", help="When the camera is streaming and the remote model is configured, analyze frames automatically at the selected interval. This sends sampled images to an external AI provider.")
         live_opencv_always = st.checkbox("Keep OpenCV processing active on every live frame", value=True, key="live_opencv_always", help="OpenCV runs continuously on each incoming frame while the webcam stream is active. Turn this off only for troubleshooting.")
-        live_interval = st.select_slider("Analyze a frame every", options=[15, 30, 60], value=30, key="live_interval_seconds", format_func=lambda x: f"{x} seconds")
+        live_interval = st.select_slider("AI analysis target interval", options=[1, 2, 5, 10], value=1, key="live_interval_seconds", format_func=lambda x: "Every 1 second" if x == 1 else f"Every {x} seconds", help="Requests are serialized. The next sample is submitted as soon as the interval has elapsed and the previous request has finished; remote model latency can make results arrive slower than once per second.")
         live_mode_label = st.selectbox("Live analysis task", options=list(MODE_LABELS.values()), index=0, key="live_auto_mode_label", help="Auto-observe summarizes the overall scene, clearly visible objects and positions, visible activities, and readable text. Other modes focus on one task.")
         live_mode = next(k for k, v in MODE_LABELS.items() if v == live_mode_label)
         live_question = ""
