@@ -1,14 +1,15 @@
-# VisionQuest cloud dependency fix
+# Deployment note — current cloud edition
 
-The previous deployment pinned `torch==2.6.0+cpu`, which is not installable in the Python 3.14.8 runtime shown in the Streamlit Cloud logs. This version updates the pin to `torch==2.9.1+cpu`, which has a CPython 3.14 Linux CPU wheel on the official PyTorch CPU wheel index.
+This note supersedes an older deployment workaround that discussed changing a PyTorch version. That workaround belongs to a previous build and **must not be applied to the current cloud edition**.
 
-## Apply to an existing GitHub repository
+The current VisionQuest cloud repository uses OpenCV DNN for local object detection and the hosted Hugging Face Inference Providers API for scene understanding and conversational replies. The current `requirements.txt` does not pin PyTorch.
 
-1. Replace the repository's `requirements.txt` with this file (or edit only the torch line).
-2. Commit the change to the branch used by Streamlit, currently `main`.
-3. Wait for Streamlit Community Cloud to rebuild.
-4. Check logs: it should process `torch==2.9.1+cpu`, not `torch==2.6.0+cpu`.
+## Deploy the current edition
 
-If the install still fails, use Streamlit Advanced settings to redeploy with Python 3.12. That is a valid alternative because it matches the original PyTorch 2.6-era stack, but Python 3.14 can use the updated torch pin.
+1. In Streamlit Community Cloud, use this repository's `main` branch and set the main file path to `app.py`.
+2. Prefer the tested Python 3.12 runtime described in `README.md`.
+3. Configure `APP_PASSWORD` and `HF_TOKEN` in Streamlit Secrets. The Hugging Face token needs Inference Providers permission. Add `DATABASE_URL` only if a managed PostgreSQL database has been created and should be used for durable memory.
+4. Let Streamlit rebuild from the current `requirements.txt`. Do not manually add the old Torch pin to this build.
+5. Verify the deployed application using `DEPLOYMENT_CHECKLIST.md`, especially the typed-question path under LIVE JARVIS. When a spoken question produces no answer, test a typed question and inspect the displayed provider error before changing browser audio settings.
 
-Do not commit secrets or private records to GitHub. This is still a shared-vault prototype, not a production-ready health application.
+Never commit passwords, API tokens, database credentials, private portraits, or database files to GitHub. The app is a shared-vault prototype, not a production-ready or clinically validated health application.
