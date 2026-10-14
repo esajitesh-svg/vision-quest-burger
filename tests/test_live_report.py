@@ -62,7 +62,7 @@ def test_live_report_explains_empty_detection_result_without_claiming_scene_is_e
         None,
         {
             "detections": [],
-            "age_seconds": 2.0,
+            "age_seconds": 0.5,
             "busy": False,
             "error": "",
             "model": "test-detector",
