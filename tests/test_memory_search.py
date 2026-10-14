@@ -179,4 +179,4 @@ def test_portrait_store_requires_valid_image_and_respects_profile(tmp_path, monk
         raise AssertionError("Invalid portrait data should be rejected")
 
     assert db.get_person_portrait(person["id"]) is None
-\n
+
