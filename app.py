@@ -1190,6 +1190,9 @@ with voice_tab:
         ):
             pass  # Streamlit reruns the script frequently; do not process the same clip twice.
         else:
+            # Mark the clip as seen before network calls so ordinary Streamlit reruns
+            # never re-submit audio or repeat potentially billable requests.
+            st.session_state["voice_last_audio_hash"] = audio_hash
             voice_frame_reserved = False
             live_image_bytes = None
             try:
@@ -1222,7 +1225,6 @@ with voice_tab:
                         conversation_history=prior_turns,
                         live_image_bytes=live_image_bytes,
                     )
-                st.session_state["voice_last_audio_hash"] = audio_hash
                 st.session_state["voice_latest_transcript"] = transcript
                 st.session_state["voice_latest_reply"] = reply
                 st.session_state["voice_latest_used_live_camera"] = live_image_bytes is not None
@@ -1231,7 +1233,7 @@ with voice_tab:
                 history.append({"question": transcript, "reply": reply})
                 st.session_state["voice_chat_history"] = history[-10:]
             except Exception as exc:
-                st.error(f"Voice conversation could not complete: {exc}")
+                st.error(f"Voice conversation could not complete: {exc}. Record a new short question to retry.")
             finally:
                 if voice_frame_reserved:
                     # Release the shared scene-analysis slot after using this image
