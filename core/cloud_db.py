@@ -157,6 +157,39 @@ def search_memories(query: str, limit: int = 100) -> list[dict]:
     return [row for _, _, row in ranked[:max(1, min(int(limit), 500))]]
 
 
+
+_MEMORY_RECALL_CUES = re.compile(
+    r"\b(?:remember|recall|forgot|forget|memories|memory|remind|reminder)\b"
+    r"|\bwhere\s+(?:did|have)\s+i\s+(?:put|leave|left|keep|kept|place)\b"
+    r"|\bwhat\s+(?:did|have)\s+i\s+(?:say|do|save|put|leave|plan)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def search_memories_for_voice(query: str, limit: int = 10) -> list[dict]:
+    """Retrieve relevant notes and, for explicit recall requests, recent fallback notes.
+
+    A broad phrase such as "I forgot" may not contain any words from a saved
+    note. In that case, offer a small set of recent notes as retrieval context.
+    This does not assert that any note is what the user forgot, and is not used
+    for ordinary live-scene questions.
+    """
+    value = (query or "").strip()
+    bounded_limit = max(1, min(int(limit), 10))
+    relevant = search_memories(value, limit=bounded_limit)
+    if not value or not _MEMORY_RECALL_CUES.search(value) or len(relevant) >= bounded_limit:
+        return relevant
+
+    seen_ids = {row.get("id") for row in relevant}
+    for row in list_memories(limit=1000):
+        row_id = row.get("id")
+        if row_id not in seen_ids:
+            relevant.append(row)
+            seen_ids.add(row_id)
+        if len(relevant) >= bounded_limit:
+            break
+    return relevant
+
 def export_memories_csv() -> bytes:
     output = io.StringIO(newline="")
     writer = csv.writer(output)
