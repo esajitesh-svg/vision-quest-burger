@@ -56,7 +56,10 @@ def get_local_object_detector():
  return RealtimeYOLOXDetector()
 
 class CamState:
- def __init__(self): self.lock=threading.Lock(); self.frame=None
+ def __init__(self):
+  self.lock=threading.Lock()
+  self.frame=None
+  self.updated_at=0.0
 class Processor:
  def __init__(self, state):
   # Receive the per-session state explicitly. WebRTC callbacks execute on a
@@ -66,6 +69,7 @@ class Processor:
   arr = frame.to_ndarray(format="bgr24")
   with self.state.lock:
    self.state.frame = arr.copy()
+   self.state.updated_at = time.monotonic()
   return av.VideoFrame.from_ndarray(arr, format="bgr24")
 defaults={
  "cam_state":CamState(),
@@ -73,6 +77,8 @@ defaults={
  "analysis_time":"Not run","chat":[],"audio_hash":"","voice_event_id":"",
  "last_transcript":"","speech_text":"","speech_seq":0,"status":"READY",
  "opencv_result_rgb":None,"opencv_metrics":{},"opencv_detections":[],
+ "opencv_detection_last_run":0.0,"opencv_detection_error":"",
+ "opencv_detection_elapsed":0.0,"opencv_frame_counter":0,
  "observer_last_run_monotonic":0.0
 }
 for k,v in defaults.items():
@@ -126,106 +132,135 @@ with r:
  st.caption("Camera frames are kept in local app memory. OpenCV processing, optional object detection, and scene observation are available below.")
  st.markdown('</div>',unsafe_allow_html=True)
 
- with st.expander("04 / OPENCV ANALYSER + OBJECT DETECTOR", expanded=False):
-  st.caption("OpenCV operators run on the current camera frame. Optional YOLOX object detection uses OpenCV DNN on the CPU; first use downloads its compact model.")
-  cv_mode = st.selectbox(
-   "OpenCV display operator",
-   ["COLOR + HUD","GRAYSCALE","CANNY EDGE MAP","CONTOUR MAP","ADAPTIVE THRESHOLD","HSV SATURATION"],
-   key="smriti_cv_mode",
-  )
-  ca, cb = st.columns(2)
-  with ca:
-   canny_low = st.slider("Canny lower threshold",0,200,55,5,key="smriti_canny_low")
-  with cb:
-   canny_high = st.slider("Canny upper threshold",20,255,140,5,key="smriti_canny_high")
-  enhance_cv = st.checkbox("Enhance local contrast before analysis",value=False,key="smriti_cv_enhance")
-  detect_objects = st.checkbox("Also detect common objects (OpenCV DNN / YOLOX)",value=False,key="smriti_cv_detect_objects")
-  confidence_pct = st.slider("Minimum object confidence",15,80,35,5,key="smriti_cv_confidence")
-  if st.button("RUN OPENCV ANALYSER",use_container_width=True,key="smriti_run_cv"):
-   try:
-    with st.session_state.cam_state.lock:
-     cv_frame = st.session_state.cam_state.frame.copy() if st.session_state.cam_state.frame is not None else None
-    if cv_frame is None:
-     st.warning("Start the camera and wait for a live frame first.")
-    else:
-     with st.spinner("Processing the current frame with OpenCV…"):
-      processed, _, metrics = process_live_frame(
-       cv_frame,max_side=960,enhance=enhance_cv,encode_jpeg=False,compute_metrics=True
+ @st.fragment(run_every=1)
+ def render_live_analyser():
+  with st.expander("04 / LIVE OPENCV ANALYSER + OBJECT DETECTOR", expanded=True):
+   st.caption("This panel refreshes from the newest camera frame about once per second. OpenCV display processing is local; optional YOLOX labels run locally on the CPU.")
+   cv_mode = st.selectbox(
+    "OpenCV display operator",
+    ["COLOR + HUD","GRAYSCALE","CANNY EDGE MAP","CONTOUR MAP","ADAPTIVE THRESHOLD","HSV SATURATION"],
+    key="smriti_cv_mode",
+   )
+   ca, cb = st.columns(2)
+   with ca:
+    canny_low = st.slider("Canny lower threshold",0,200,55,5,key="smriti_canny_low")
+   with cb:
+    canny_high = st.slider("Canny upper threshold",20,255,140,5,key="smriti_canny_high")
+   enhance_cv = st.checkbox("Enhance local contrast before display",value=False,key="smriti_cv_enhance")
+   detect_objects = st.checkbox("Enable live object detection (OpenCV DNN / YOLOX)",value=False,key="smriti_cv_detect_objects")
+   confidence_pct = st.slider("Minimum object confidence",15,80,35,5,key="smriti_cv_confidence")
+   now = time.monotonic()
+   with st.session_state.cam_state.lock:
+    cv_frame = st.session_state.cam_state.frame.copy() if st.session_state.cam_state.frame is not None else None
+    frame_age = now - st.session_state.cam_state.updated_at if st.session_state.cam_state.updated_at else 9999.0
+
+   if cv_frame is None or frame_age > 5.0:
+    st.info("Waiting for a fresh camera frame. Start the camera and keep the live feed running.")
+   else:
+    try:
+     processed, _, metrics = process_live_frame(
+      cv_frame,max_side=960,enhance=enhance_cv,encode_jpeg=False,compute_metrics=True
+     )
+     st.session_state.opencv_frame_counter += 1
+     display = render_cv_view(
+      processed,mode=cv_mode,canny_low=canny_low,canny_high=canny_high,
+      frame_count=st.session_state.opencv_frame_counter,
+     )
+     if detect_objects and not st.session_state.opencv_detection_error:
+      run_detector = (
+       st.session_state.opencv_detection_last_run <= 0.0
+       or now - st.session_state.opencv_detection_last_run >= 2.5
       )
-      display = render_cv_view(
-       processed,mode=cv_mode,canny_low=canny_low,canny_high=canny_high,
-       frame_count=int(time.monotonic()),
-      )
-      detections = []
-      if detect_objects:
-       with st.spinner("Loading/running local OpenCV YOLOX object detection…"):
-        detector = get_local_object_detector()
-        detection_result = detector.detect(
-         processed,confidence_threshold=confidence_pct/100.0,max_detections=30
-        )
-        detections = detection_result.detections
-        display = draw_detection_overlay(display,detections,age_seconds=0.0,max_age_seconds=1.5)
-        metrics["detector_model"] = REALTIME_DETECTOR_LABEL
-        metrics["detector_ms"] = round(detection_result.elapsed_seconds*1000.0,1)
+      if run_detector:
+       try:
+        with st.spinner("Loading/running local YOLOX detector… first run downloads the model"):
+         detector = get_local_object_detector()
+         result = detector.detect(
+          processed,confidence_threshold=confidence_pct/100.0,max_detections=30
+         )
+        st.session_state.opencv_detections = result.detections
+        st.session_state.opencv_detection_last_run = time.monotonic()
+        st.session_state.opencv_detection_elapsed = result.elapsed_seconds
+       except Exception as detector_exc:
+        st.session_state.opencv_detection_error = f"{type(detector_exc).__name__}: {detector_exc}"
+     elif not detect_objects:
+      st.session_state.opencv_detections = []
+      st.session_state.opencv_detection_error = ""
+      st.session_state.opencv_detection_last_run = 0.0
+
+     detection_age = (
+      time.monotonic() - st.session_state.opencv_detection_last_run
+      if st.session_state.opencv_detection_last_run > 0.0 else 9999.0
+     )
+     active_detections = (
+      st.session_state.opencv_detections if detect_objects and detection_age <= 3.5 else []
+     )
+     if active_detections:
+      display = draw_detection_overlay(display,active_detections,age_seconds=detection_age,max_age_seconds=3.5)
      st.session_state.opencv_result_rgb = cv2.cvtColor(display,cv2.COLOR_BGR2RGB)
      st.session_state.opencv_metrics = metrics
-     st.session_state.opencv_detections = detections
-   except Exception as cv_exc:
-    st.error(f"OpenCV analyser failed: {type(cv_exc).__name__}: {cv_exc}")
-  if st.session_state.opencv_result_rgb is not None:
-   st.image(st.session_state.opencv_result_rgb,caption="OpenCV analyser output · processed frame",use_container_width=True)
-   m = st.session_state.opencv_metrics
-   metrics_cols = st.columns(4)
-   metrics_cols[0].metric("Frame size",f"{m.get('width','—')} × {m.get('height','—')}")
-   metrics_cols[1].metric("Brightness",str(m.get("brightness","—")))
-   metrics_cols[2].metric("Sharpness",str(m.get("sharpness","—")))
-   metrics_cols[3].metric("Objects",str(len(st.session_state.opencv_detections)))
-   if m.get("brightness_label"):
-    st.caption(f"Lighting: {m['brightness_label']} · Focus estimate: {m.get('sharpness_label','unavailable')}")
-   if m.get("detector_model"):
-    st.caption(f"Detector: {m['detector_model']} · inference {m.get('detector_ms','—')} ms")
-   if st.session_state.opencv_detections:
-    st.write("**Detected objects**")
-    for item in st.session_state.opencv_detections:
-     st.write(f"• {item['label']} — {item['score']:.0%} confidence")
-   elif m.get("detector_model"):
-    st.info("No supported objects exceeded the selected confidence threshold in this frame.")
-@st.fragment(run_every=10)
+     st.image(st.session_state.opencv_result_rgb,caption="LIVE OpenCV output · refreshed from current camera frame",use_container_width=True)
+     metrics_cols = st.columns(4)
+     metrics_cols[0].metric("Frame size",f"{metrics.get('width','—')} × {metrics.get('height','—')}")
+     metrics_cols[1].metric("Brightness",str(metrics.get("brightness","—")))
+     metrics_cols[2].metric("Sharpness",str(metrics.get("sharpness","—")))
+     metrics_cols[3].metric("Objects",str(len(active_detections)) if detect_objects else "Off")
+     if metrics.get("brightness_label"):
+      st.caption(f"Lighting: {metrics['brightness_label']} · Focus estimate: {metrics.get('sharpness_label','unavailable')} · frame age {frame_age:.1f}s")
+     if detect_objects:
+      if st.session_state.opencv_detection_error:
+       st.error("Live object detector unavailable: " + st.session_state.opencv_detection_error)
+       st.caption("Uncheck and recheck object detection to retry after correcting the issue.")
+      else:
+       st.caption(f"Detector: {REALTIME_DETECTOR_LABEL} · last inference {st.session_state.opencv_detection_elapsed*1000:.0f} ms · detections refresh about every 2.5 seconds")
+       if active_detections:
+        st.write("**Current object labels**")
+        for item in active_detections:
+         st.write(f"• {item['label']} — {item['score']:.0%} confidence")
+       elif st.session_state.opencv_detection_last_run > 0:
+        st.caption("No supported objects exceeded the selected confidence threshold in the latest scan.")
+    except Exception as cv_exc:
+     st.error(f"Live OpenCV analyser failed: {type(cv_exc).__name__}: {cv_exc}")
+
+ render_live_analyser()
+
+@st.fragment(run_every=5)
 def render_live_observer():
- st.markdown('<div class="panel"><div class="kicker">05 / LIVE OBSERVER</div><h3>Scene Observer // Local Granite Vision</h3></div>',unsafe_allow_html=True)
- st.caption("Observe the current webcam frame on demand, or enable periodic local vision analysis. Automatic observation is off by default to keep your PC responsive.")
- auto_observe = st.checkbox("Enable automatic scene observation",value=False,key="smriti_auto_observer")
- interval = st.select_slider("Automatic observation interval",options=[15,30,60],value=30,format_func=lambda n:f"Every {n} seconds",key="smriti_observer_interval")
- run_now = st.button("OBSERVE CURRENT FRAME NOW",use_container_width=True,key="smriti_observe_now")
- now = time.monotonic()
- due = auto_observe and (now-float(st.session_state.get("observer_last_run_monotonic",0.0)) >= interval)
- if run_now or due:
-  st.session_state.observer_last_run_monotonic = now
-  with st.session_state.cam_state.lock:
-   observer_frame = st.session_state.cam_state.frame.copy() if st.session_state.cam_state.frame is not None else None
-  if observer_frame is None:
-   st.warning("No live frame is available. Start the camera, wait for the video, and try again.")
-  else:
-   try:
-    with st.spinner("Observer is analysing the current frame with local Granite…"):
-     ok, encoded = cv2.imencode(".jpg",observer_frame,[int(cv2.IMWRITE_JPEG_QUALITY),82])
-     if not ok:
-      raise RuntimeError("OpenCV could not encode the current camera frame.")
-     image_bytes = encoded.tobytes()
-     result = analyze_with_granite(image_bytes,mode="auto_observe",max_side=768)
-    st.session_state.analysis = result.text
-    st.session_state.analysis_time = datetime.now().strftime("%H:%M:%S")
-    st.session_state.status = f"OBSERVER COMPLETE · {result.elapsed_seconds:.1f}s"
+ with st.expander("05 / LIVE OBSERVER // GRANITE VISION", expanded=True):
+  st.caption("Smriti's observer describes the newest webcam frame with local Granite Vision. Enable periodic scene observations or trigger one manually. Automatic observations are off by default.")
+  auto_observe = st.checkbox("Enable automatic scene observation",value=False,key="smriti_auto_observer")
+  interval = st.select_slider("Observation interval",options=[15,30,60],value=30,format_func=lambda n:f"Every {n} seconds",key="smriti_observer_interval")
+  run_now = st.button("OBSERVE CURRENT FRAME NOW",use_container_width=True,key="smriti_observe_now")
+  now = time.monotonic()
+  due = auto_observe and (now-float(st.session_state.get("observer_last_run_monotonic",0.0)) >= interval)
+  if run_now or due:
+   with st.session_state.cam_state.lock:
+    observer_frame = st.session_state.cam_state.frame.copy() if st.session_state.cam_state.frame is not None else None
+    frame_age = now-st.session_state.cam_state.updated_at if st.session_state.cam_state.updated_at else 9999.0
+   if observer_frame is None or frame_age > 5.0:
+    st.warning("No fresh live camera frame is available. Start the camera, wait for video, and try again.")
+   else:
+    st.session_state.observer_last_run_monotonic = now
     try:
-     save_observation(result.text,source="Smriti local Live Observer",model=result.model,frame_hash=hashlib.sha256(image_bytes).hexdigest())
-    except Exception:
-     pass
-   except Exception as observer_exc:
-    st.session_state.status = "OBSERVER ERROR"
-    st.error(f"Live Observer failed: {type(observer_exc).__name__}: {observer_exc}")
- st.markdown("**LATEST OBSERVATION**")
- st.write(st.session_state.analysis)
- st.caption(f"Last observation: {st.session_state.analysis_time} · {st.session_state.status}")
+     with st.spinner("Live Observer is analysing the current frame with local Granite…"):
+      ok, encoded = cv2.imencode(".jpg",observer_frame,[int(cv2.IMWRITE_JPEG_QUALITY),82])
+      if not ok:
+       raise RuntimeError("OpenCV could not encode the current camera frame.")
+      image_bytes = encoded.tobytes()
+      result = analyze_with_granite(image_bytes,mode="auto_observe",max_side=768)
+     st.session_state.analysis = result.text
+     st.session_state.analysis_time = datetime.now().strftime("%H:%M:%S")
+     st.session_state.status = f"OBSERVER COMPLETE · {result.elapsed_seconds:.1f}s"
+     try:
+      save_observation(result.text,source="Smriti local Live Observer",model=result.model,frame_hash=hashlib.sha256(image_bytes).hexdigest())
+     except Exception as save_exc:
+      st.warning(f"Observation was generated, but memory logging failed: {type(save_exc).__name__}: {save_exc}")
+    except Exception as observer_exc:
+     st.session_state.status = "OBSERVER ERROR"
+     st.error(f"Live Observer failed: {type(observer_exc).__name__}: {observer_exc}")
+  st.markdown("**LATEST LIVE OBSERVATION**")
+  st.write(st.session_state.analysis)
+  st.caption(f"Last observation: {st.session_state.analysis_time} · {st.session_state.status}")
 
 render_live_observer()
 
