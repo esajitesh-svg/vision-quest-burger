@@ -79,6 +79,16 @@ button:disabled{opacity:.38;cursor:not-allowed}
     }, "*");
   }
 
+  function sendStatus(code, message) {
+    const eventId = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+    sendValue({
+      event: "status",
+      event_id: eventId,
+      code: String(code || "info"),
+      message: String(message || "").slice(0, 300)
+    });
+  }
+
   function scheduleRestart(delay = 220) {
     if (!desiredListening || speaking || awaitingReply || !args.enabled || args.busy) return;
     clearTimeout(startTimer);
@@ -88,7 +98,9 @@ button:disabled{opacity:.38;cursor:not-allowed}
   function createRecognition() {
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Recognition) {
-      setStatus("Speech recognition is not supported here. Use current Chrome or Edge.");
+      const message = "Speech recognition is not supported here. Use current Chrome or Edge, or type your question below.";
+      setStatus(message);
+      sendStatus("unsupported", message);
       return null;
     }
     const rec = new Recognition();
@@ -99,7 +111,9 @@ button:disabled{opacity:.38;cursor:not-allowed}
     rec.onstart = () => {
       recognitionRunning = true;
       lastResultIndex = 0;
-      setStatus("Listening — speak naturally, then pause briefly.", true);
+      const message = "Microphone is listening. Speak naturally, then pause briefly.";
+      setStatus(message, true);
+      sendStatus("listening", message);
     };
     rec.onresult = event => {
       let partial = "";
@@ -111,7 +125,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
           // Accept one final utterance, then hold the mic until the answer is spoken.
           awaitingReply = true;
           const eventId = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
-          heardNode.textContent = "Heard: " + phrase;
+          heardNode.textContent = "Recognized: " + phrase;
           setStatus("Heard you — preparing a reply…", true);
           sendValue({event: "transcript", event_id: eventId, transcript: phrase});
           try { rec.stop(); } catch (_) {}
@@ -126,17 +140,20 @@ button:disabled{opacity:.38;cursor:not-allowed}
       }
     };
     rec.onerror = event => {
-      const error = String(event.error || "unknown");
+      const error = String(event && event.error || "unknown");
+      let message = "Speech error: " + error + ". Press Activate to retry.";
       if (error === "not-allowed" || error === "service-not-allowed") {
         desiredListening = false;
-        setStatus("Microphone permission denied. Allow it in the browser address bar, then activate again.");
+        message = "Microphone permission denied. Allow microphone access for this site, then activate again.";
       } else if (error === "no-speech") {
-        setStatus("Still listening — say a short sentence.", desiredListening);
+        message = "No speech was detected. Check the selected microphone and speak a short sentence.";
       } else if (error === "network") {
-        setStatus("Browser speech service has a network issue. Check connection and retry.");
-      } else if (error !== "aborted") {
-        setStatus("Speech error: " + error + ". Press Activate to retry.");
+        message = "Browser speech recognition has a network issue. Check connection and retry.";
+      } else if (error === "aborted") {
+        return;
       }
+      setStatus(message, error === "no-speech");
+      sendStatus("recognition_error", message);
     };
     rec.onend = () => {
       recognitionRunning = false;
@@ -183,6 +200,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
     recognition = null;
     recognitionRunning = false;
     setStatus("Requesting microphone permission…");
+    sendStatus("starting", "Requesting microphone permission from the browser.");
     startRecognition();
   }
 
