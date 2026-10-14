@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import core.cloud_db as db
+from io import BytesIO
+from PIL import Image
 
 
 def test_search_memories_ranks_person_and_note_matches(tmp_path, monkeypatch):
@@ -141,6 +143,26 @@ def test_voice_activity_retrieval_finds_past_observations_and_conversation(tmp_p
     assert "desk" in rendered
     assert any(row["person_name"] == "Past conversation" for row in results)
     assert any(row["person_name"] == "Past observation" for row in results)
+
+
+def test_valid_portrait_is_saved_and_can_be_removed(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "activity.sqlite3")
+    db.init_db()
+    db.save_person("Maya", "Aunt")
+    person = db.list_people()[0]
+
+    image_buffer = BytesIO()
+    Image.new("RGB", (24, 24), (20, 160, 200)).save(image_buffer, format="PNG")
+    image_bytes = image_buffer.getvalue()
+
+    db.save_person_portrait(person["id"], image_bytes, "image/png")
+    stored = db.get_person_portrait(person["id"])
+    assert stored is not None
+    assert bytes(stored["image_data"]) == image_bytes
+    assert stored["content_type"] == "image/png"
+
+    db.delete_person_portrait(person["id"])
+    assert db.get_person_portrait(person["id"]) is None
 
 
 def test_portrait_store_requires_valid_image_and_respects_profile(tmp_path, monkeypatch):
