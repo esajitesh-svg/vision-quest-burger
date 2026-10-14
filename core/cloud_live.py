@@ -446,6 +446,7 @@ class LiveMonitorState:
             if not force and self.last_analysis_started is not None and now - self.last_analysis_started < interval:
                 return None
             self.analysis_busy = True
+            self.latest_analysis_error = ""
             self.last_analysis_started = now
             if self.latest_analysis_jpeg:
                 return bytes(self.latest_analysis_jpeg)
