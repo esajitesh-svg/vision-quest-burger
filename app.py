@@ -21,11 +21,11 @@ import av
 import cv2
 import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
-from streamlit_webrtc import WebRtcMode, webrtc_streamer
+from streamlit_webrtc import VideoHTMLAttributes, WebRtcMode, webrtc_streamer
 
 from core.cloud_db import init_db, list_people, list_memories, save_person, save_memory, search_memories, export_memories_csv
 from core.cloud_vision import MODE_LABELS, analyze_image, model_status, prepare_image
-from core.cloud_detection import OBJECT_DETECTION_MODEL, detect_objects
+from core.realtime_detector import REALTIME_DETECTOR_LABEL, RealtimeYOLOXDetector
 from core.live_report import build_live_report
 from core.cloud_cv import process_image_opencv
 from core.cloud_live import LiveMonitorState, process_live_frame, draw_detection_overlay
@@ -146,19 +146,6 @@ def run_live_vision_worker(live_state, sample_bytes: bytes, mode: str, question:
         live_state.finish_analysis(error=f"{type(exc).__name__}: {exc}")
 
 
-def run_live_detection_worker(live_state, sample_bytes: bytes, token: str, threshold: float) -> None:
-    """Run discrete object detection off the Streamlit/WebRTC callback threads."""
-    try:
-        result = detect_objects(sample_bytes, token=token, score_threshold=threshold, max_detections=20)
-        live_state.finish_detection(
-            detections=result.detections,
-            model=result.model,
-            elapsed_seconds=result.elapsed_seconds,
-        )
-    except Exception as exc:
-        live_state.finish_detection(error=f"{type(exc).__name__}: {exc}")
-
-
 st.set_page_config(
     page_title="Smriti AI · VisionQuest Cloud",
     page_icon="🧠",
@@ -166,12 +153,19 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+
+@st.cache_resource(show_spinner=False)
+def get_realtime_detector() -> RealtimeYOLOXDetector:
+    """Load the local OpenCV DNN model once per app process."""
+    return RealtimeYOLOXDetector()
+
+
 CSS = r"""
 <style>
 :root { color-scheme: dark; }
 html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] { background:#05090e !important; color:#c5d9e3 !important; }
 [data-testid="stHeader"] { background:rgba(5,9,14,.94) !important; }
-[data-testid="stMainBlockContainer"] { max-width:1500px; padding-top:1rem; padding-bottom:3rem; }
+[data-testid="stMainBlockContainer"] { max-width:none; width:100%; padding:.3rem .55rem .65rem; }
 [data-testid="stMarkdownContainer"], [data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li, [data-testid="stCaptionContainer"], [data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] *, label, .stRadio label, .stCheckbox label { color:#b9ccd7 !important; }
 h1,h2,h3,h4 { color:#e3f7ff !important; letter-spacing:-.02em; }
 a { color:#46eaff !important; }
@@ -200,7 +194,7 @@ a { color:#46eaff !important; }
 [data-testid="stTabs"] [aria-selected="true"] { color:#5eecff !important; border-bottom-color:#00d8f2 !important; }
 .result { padding:1rem 1.15rem; border:1px solid #214d5a; border-left:3px solid #00d7ef; background:#07151c; border-radius:6px; color:#d1eef5; line-height:1.65; white-space:pre-wrap; box-shadow:inset 0 0 20px rgba(0,190,225,.035); }
 .small-note { font-size:.86rem; color:#86a7b6 !important; }
-.workspace-masthead { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:1rem; padding:1rem 1.2rem; margin:.15rem 0 .8rem; background:linear-gradient(110deg,#03080c,#071820 65%,#071019); border:1px solid #1c5665; border-left:3px solid #32eaff; box-shadow:inset 0 0 24px rgba(0,216,239,.035); }
+.workspace-masthead { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:1rem; padding:.55rem 1rem; margin:.08rem 0 .3rem; background:linear-gradient(110deg,#03080c,#071820 65%,#071019); border:1px solid #1c5665; border-left:3px solid #32eaff; box-shadow:inset 0 0 24px rgba(0,216,239,.035); }
 .workspace-brand { display:flex; gap:.9rem; align-items:center; min-width:250px; }
 .workspace-glyph { width:48px; height:48px; display:flex; align-items:center; justify-content:center; border:1px solid #2c93a5; color:#5ef3ff; font-size:1.8rem; background:radial-gradient(circle,#12313b,#061116); box-shadow:0 0 20px rgba(0,223,247,.1); }
 .workspace-kicker { color:#50e7f8 !important; font:700 .66rem/1.4 monospace; letter-spacing:.2em; }
@@ -209,7 +203,7 @@ a { color:#46eaff !important; }
 .workspace-node { display:flex; flex-wrap:wrap; gap:.45rem; }
 .workspace-node span { border:1px solid #204450; background:#07131a; padding:.55rem .7rem; font:700 .65rem monospace; letter-spacing:.06em; color:#79bdc9; }
 .workspace-node b { color:#53f2bd; font-weight:800; }
-.workspace-readouts { display:flex; flex-wrap:wrap; gap:1.2rem; padding:.45rem .75rem; margin-bottom:.9rem; border-bottom:1px solid #153a45; background:rgba(6,19,26,.7); font: .7rem monospace; letter-spacing:.08em; color:#5da2b1; }
+.workspace-readouts { display:flex; flex-wrap:wrap; gap:1.2rem; padding:.25rem .75rem; margin-bottom:.35rem; border-bottom:1px solid #153a45; background:rgba(6,19,26,.7); font: .7rem monospace; letter-spacing:.08em; color:#5da2b1; }
 .workspace-readouts b { color:#d5faff; margin-left:.35rem; }
 .cv-workbench-label { padding:.45rem .6rem; margin:.3rem 0 .65rem; border-left:2px solid #39e6f8; background:linear-gradient(90deg,rgba(0,196,220,.09),transparent); color:#69e9f8 !important; font:700 .7rem monospace; letter-spacing:.15em; }
 .cv-feed-heading { color:#67edf8 !important; font:700 .76rem monospace; letter-spacing:.16em; border-bottom:1px solid #174552; padding-bottom:.55rem; margin:.8rem 0 .45rem; }
@@ -315,8 +309,8 @@ st.markdown(
     "<div><div class='workspace-kicker'>SMRITI AI // VISION SYSTEMS</div>"
     "<div class='workspace-title'>VISIONQUEST · CV WORKSPACE</div>"
     "<p class='workspace-subtitle'>LIVE FRAME PIPELINE / PIXEL ANALYSIS / VISUAL MEMORY INTERFACE</p></div></div>"
-    "<div class='workspace-node'><span>CV ENGINE <b>OPENCV</b></span><span>INPUT <b>DEVICE CAMERA</b></span>"
-    "<span>INFERENCE <b>REMOTE AI</b></span></div></div>",
+    "<div class='workspace-node'><span>CV ENGINE <b>OPENCV DNN</b></span><span>INPUT <b>DEVICE CAMERA</b></span>"
+    "<span>DETECTOR <b>LOCAL YOLOX</b></span></div></div>",
     unsafe_allow_html=True,
 )
 st.markdown(
