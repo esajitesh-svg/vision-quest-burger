@@ -38,6 +38,16 @@ MODES: dict[str, str] = {
     "objects": "List clearly visible objects and say where each appears in the frame (left, center, right, foreground, or background). Do not invent unseen objects.",
     "read_text": "Transcribe only text that is visibly readable in the image. Preserve wording. Mark uncertain text as [unclear]. Do not invent missing words.",
     "accessibility": "Give a calm spoken-style description in no more than 35 words. Prioritize important visible details. Do not infer identity or personal circumstances.",
+    "live_companion": (
+        "Speak as a calm, attentive visual companion describing the current camera view. Use 2–4 short, "
+        "natural sentences and aim for no more than 55 words. Mention the most important clearly visible "
+        "objects and where they are, any visible activity or interaction, and any notable readable text. "
+        "Include more than one distinct object when several are clearly visible. If the scene changes, "
+        "prioritize meaningful new or changed details instead of repeating a generic description. Be "
+        "specific but never claim to see everything. State uncertainty when a detail is small, blurred, "
+        "or obscured. Do not identify people, guess relationships, infer emotions or intent, or invent "
+        "events outside this frame. Do not greet the user."
+    ),
     "visual_question": "Answer the user's question using only evidence from the image. If it cannot be determined, say so clearly.",
 }
 MODE_LABELS = {
@@ -46,6 +56,7 @@ MODE_LABELS = {
     "objects": "Find and locate objects",
     "read_text": "Read visible text",
     "accessibility": "Short spoken description",
+    "live_companion": "Live companion narration: objects + activities",
     "visual_question": "Ask a question about the image",
 }
 
@@ -155,7 +166,9 @@ def analyze_image(
     # Bound generation so a live observation does not spend excessive time producing prose.
     # Increase image detail manually only when fine text/small-object detail is important.
     max_tokens = 450 if mode == "auto_observe" else (
-        360 if mode in ("objects", "read_text", "visual_question") else 220
+        360 if mode in ("objects", "read_text", "visual_question") else (
+            150 if mode == "live_companion" else 220
+        )
     )
     payload = {
         "model": MODEL_ID,
