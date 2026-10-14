@@ -25,12 +25,14 @@ MODES: dict[str, str] = {
     "auto_observe": (
         "Inspect the image carefully and produce a detailed, evidence-based observation using these headings: "
         "SCENE; VISIBLE OBJECTS AND POSITIONS; ACTIONS AND INTERACTIONS; FINE DETAILS; READABLE TEXT; UNCERTAINTIES. "
-        "Inventory each clearly visible object separately when possible. Include approximate position, foreground/background, "
-        "visible color, shape, relative size, orientation, and condition only when genuinely supported. Describe spatial "
-        "relationships and what is actually happening in the frame. Pay special attention to smaller objects, items being "
-        "handled, signs, labels, and background details if they are clear enough to report. Copy only legible text and mark "
-        "partially readable text as uncertain. Do not infer identity, emotion, intent, relationships, or events outside "
-        "this single frame; do not guess obscured or ambiguous objects or claim the inventory is complete."
+        "Under SCENE, report the overall scene and setting. Under VISIBLE OBJECTS AND POSITIONS, inventory clearly visible "
+        "everyday objects separately where possible, with approximate position and foreground/background. Under ACTIONS AND "
+        "INTERACTIONS, report visible actions or activities and spatial relationships only when supported. Include visible "
+        "color, shape, relative size, orientation, and condition only when genuinely supported. Pay special attention to "
+        "smaller objects, items being handled, signs, labels, and background details if they are clear enough to report. "
+        "Under READABLE TEXT, copy only readable text and mark partially readable text as uncertain. Under UNCERTAINTIES, "
+        "explain what is ambiguous or obscured. Do not infer identity, emotion, intent, relationships, or events outside "
+        "this single frame. Do not claim to detect everything, and do not guess obscured or ambiguous objects."
     ),
     "scene": "Describe the visible scene in 2–4 concise sentences. Mention only clearly visible objects, actions, and setting.",
     "objects": "List clearly visible objects and say where each appears in the frame (left, center, right, foreground, or background). Do not invent unseen objects.",
