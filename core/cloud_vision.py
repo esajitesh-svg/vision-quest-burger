@@ -40,7 +40,7 @@ MODES: dict[str, str] = {
     "accessibility": "Give a calm spoken-style description in no more than 35 words. Prioritize important visible details. Do not infer identity or personal circumstances.",
     "live_companion": (
         "Speak as a calm, attentive visual companion describing the current camera view. Use 2–4 short, "
-        "natural sentences and aim for no more than 55 words. Mention the most important clearly visible "
+        "natural sentences and aim for no more than 35 words. Mention the most important clearly visible "
         "objects and where they are, any visible activity or interaction, and any notable readable text. "
         "Include more than one distinct object when several are clearly visible. If the scene changes, "
         "prioritize meaningful new or changed details instead of repeating a generic description. Be "

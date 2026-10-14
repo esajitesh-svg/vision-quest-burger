@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+body{margin:0;background:transparent;color:#c5d9e3}
+.shell{padding:8px 10px;border:1px solid #1c5665;border-left:3px solid #32eaff;background:linear-gradient(110deg,#03080c,#071820 70%,#071019)}
+.kicker{font:700 11px monospace;letter-spacing:.18em;color:#50e7f8;margin-bottom:7px}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+button{border:1px solid #287181;border-radius:4px;padding:10px 14px;min-height:39px;font-weight:800;letter-spacing:.04em;cursor:pointer}
+#start{background:#00cfe8;color:#031015}
+#stop{background:#0b1b25;color:#c5d9e3}
+button:disabled{opacity:.38;cursor:not-allowed}
+#status{font:12px/1.5 system-ui;color:#79bdc9;flex:1;min-width:170px}
+#heard{font-size:12px;line-height:1.5;color:#a8c5d3;margin-top:7px;min-height:17px;overflow-wrap:anywhere}
+.note{font-size:11px;color:#678d9b;margin-top:5px}
+.pulse{display:inline-block;width:7px;height:7px;border-radius:50%;background:#4a6871;margin-right:6px}
+.pulse.live{background:#51f3bb;box-shadow:0 0 8px #51f3bb}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="kicker">SMRITI // LIVE VOICE LINK</div>
+  <div class="row">
+    <button id="start" type="button">🎙 ACTIVATE LISTENING</button>
+    <button id="stop" type="button">■ STOP</button>
+    <div id="status" role="status" aria-live="polite"><span id="pulse" class="pulse"></span>Voice link idle.</div>
+  </div>
+  <div id="heard"></div>
+  <div class="note">Browser speech recognition is used for faster turn capture. Mic stays active until STOP; speaking pauses listening to prevent echo.</div>
+</div>
+<script>
+(() => {
+  const startButton = document.getElementById("start");
+  const stopButton = document.getElementById("stop");
+  const statusNode = document.getElementById("status");
+  const pulseNode = document.getElementById("pulse");
+  const heardNode = document.getElementById("heard");
+  const speech = window.speechSynthesis;
+  let args = {};
+  let recognition = null;
+  let desiredListening = false;
+  let speaking = false;
+  let currentSpeechKind = "";
+  let speechGeneration = 0;
+  let recognitionRunning = false;
+  let awaitingReply = false;
+  let previouslyBusy = false;
+  let userStopped = false;
+  let initialized = false;
+  let lastSpeechSequence = 0;
+  let lastResultIndex = 0;
+  let startTimer = null;
+
+  function setStatus(message, live = false) {
+    pulseNode.className = live ? "pulse live" : "pulse";
+    statusNode.lastChild.textContent = message;
+  }
+
+  function sendValue(value) {
+    window.parent.postMessage({
+      isStreamlitMessage: true,
+      type: "streamlit:setComponentValue",
+      dataType: "json",
+      value
+    }, "*");
+  }
+
+  function scheduleRestart(delay = 220) {
+    if (!desiredListening || speaking || awaitingReply || !args.enabled || args.busy) return;
+    clearTimeout(startTimer);
+    startTimer = setTimeout(startRecognition, delay);
+  }
+
+  function createRecognition() {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      setStatus("Speech recognition is not supported here. Use current Chrome or Edge.");
+      return null;
+    }
+    const rec = new Recognition();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+    rec.lang = args.language || "en-IN";
+    rec.onstart = () => {
+      recognitionRunning = true;
+      lastResultIndex = 0;
+      setStatus("Listening — speak naturally, then pause briefly.", true);
+    };
+    rec.onresult = event => {
+      let partial = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        const phrase = result && result[0] ? String(result[0].transcript || "").trim() : "";
+        if (!phrase) continue;
+        if (result.isFinal) {
+          // Accept one final utterance, then hold the mic until the answer is spoken.
+          awaitingReply = true;
+          const eventId = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+          heardNode.textContent = "Heard: " + phrase;
+          setStatus("Heard you — preparing a reply…", true);
+          sendValue({event: "transcript", event_id: eventId, transcript: phrase});
+          try { rec.stop(); } catch (_) {}
+          return;
+        } else {
+          partial = phrase;
+        }
+      }
+      if (partial) {
+        heardNode.textContent = "Hearing: " + partial;
+        setStatus("Listening…", true);
+      }
+    };
+    rec.onerror = event => {
+      const error = String(event.error || "unknown");
+      if (error === "not-allowed" || error === "service-not-allowed") {
+        desiredListening = false;
+        setStatus("Microphone permission denied. Allow it in the browser address bar, then activate again.");
+      } else if (error === "no-speech") {
+        setStatus("Still listening — say a short sentence.", desiredListening);
+      } else if (error === "network") {
+        setStatus("Browser speech service has a network issue. Check connection and retry.");
+      } else if (error !== "aborted") {
+        setStatus("Speech error: " + error + ". Press Activate to retry.");
+      }
+    };
+    rec.onend = () => {
+      recognitionRunning = false;
+      if (desiredListening && !speaking && !awaitingReply && args.enabled && !args.busy) {
+        scheduleRestart(260);
+      } else if (desiredListening && args.busy) {
+        setStatus("Smriti is thinking — listening will resume after the reply.", true);
+      } else if (!desiredListening) {
+        awaitingReply = false;
+        startButton.disabled = !args.enabled;
+        startButton.textContent = "🎙 ACTIVATE LISTENING";
+        setStatus("Voice link stopped.");
+      }
+    };
+    return rec;
+  }
+
+  function startRecognition() {
+    if (!desiredListening || speaking || awaitingReply || !args.enabled || args.busy || recognitionRunning) return;
+    if (!recognition) recognition = createRecognition();
+    if (!recognition) return;
+    try {
+      recognition.lang = args.language || "en-IN";
+      recognition.start();
+    } catch (error) {
+      // Chrome can briefly report InvalidStateError while a previous recognizer ends.
+      scheduleRestart(500);
+    }
+  }
+
+  function startListening() {
+    if (!args.enabled) {
+      setStatus("Enable LIVE JARVIS in the app first.");
+      return;
+    }
+    userStopped = false;
+    awaitingReply = false;
+    desiredListening = true;
+    startButton.disabled = true;
+    startButton.textContent = "● LISTENING";
+    if (recognition) {
+      try { recognition.stop(); } catch (_) {}
+    }
+    recognition = null;
+    recognitionRunning = false;
+    setStatus("Requesting microphone permission…");
+    startRecognition();
+  }
+
+  function stopListening() {
+    desiredListening = false;
+    awaitingReply = false;
+    userStopped = true;
+    clearTimeout(startTimer);
+    if (recognition) {
+      try { recognition.stop(); } catch (_) {}
+    }
+    speechGeneration += 1;
+    if (speech) speech.cancel();
+    currentSpeechKind = "";
+    speaking = false;
+    startButton.disabled = !args.enabled;
+    startButton.textContent = "🎙 ACTIVATE LISTENING";
+    setStatus("Voice link stopped.");
+  }
+
+  function speakUpdate(text, sequence, kind = "reply") {
+    if (userStopped || !text || !speech || typeof window.SpeechSynthesisUtterance === "undefined") return;
+    const requestedKind = String(kind || "reply");
+    // Never cancel an utterance just because another camera description arrived.
+    // A direct reply is allowed to interrupt narration and take priority.
+    if (speaking && requestedKind !== "reply") return;
+    const generation = ++speechGeneration;
+    speaking = true;
+    currentSpeechKind = requestedKind;
+    if (recognition && recognitionRunning) {
+      try { recognition.stop(); } catch (_) {}
+    }
+    speech.cancel();
+    const utterance = new SpeechSynthesisUtterance(String(text));
+    const lang = args.language || "en-IN";
+    utterance.lang = lang;
+    utterance.rate = Math.max(0.65, Math.min(1.25, Number(args.rate || 0.92)));
+    utterance.pitch = 1.0;
+    const voices = speech.getVoices();
+    const exact = voices.find(v => v.lang && v.lang.toLowerCase() === lang.toLowerCase());
+    const sameLanguage = voices.find(v => v.lang && v.lang.toLowerCase().startsWith(lang.split("-")[0].toLowerCase()));
+    if (exact || sameLanguage) utterance.voice = exact || sameLanguage;
+    utterance.onstart = () => {
+      if (generation !== speechGeneration) return;
+      setStatus("Smriti is speaking. Listening resumes afterwards.", true);
+    };
+    utterance.onend = () => {
+      if (generation !== speechGeneration) return;
+      speaking = false;
+      currentSpeechKind = "";
+      awaitingReply = false;
+      if (desiredListening && args.enabled) {
+        setStatus("Reply finished — listening again.", true);
+        startButton.disabled = true;
+        startButton.textContent = "● LISTENING";
+        scheduleRestart(250);
+      } else {
+        setStatus("Reply finished.");
+      }
+    };
+    utterance.onerror = () => {
+      if (generation !== speechGeneration) return;
+      speaking = false;
+      currentSpeechKind = "";
+      setStatus("Voice playback failed. Check device volume or browser speech voices.");
+      awaitingReply = false;
+      if (desiredListening) scheduleRestart(250);
+    };
+    try { speech.speak(utterance); }
+    catch (_) {
+      if (generation !== speechGeneration) return;
+      speaking = false;
+      currentSpeechKind = "";
+      setStatus("Could not play speech. Try another browser voice.");
+    }
+  }
+
+  startButton.addEventListener("click", startListening);
+  stopButton.addEventListener("click", stopListening);
+
+  window.addEventListener("message", event => {
+    if (!event.data || event.data.type !== "streamlit:render") return;
+    args = event.data.args || {};
+    startButton.disabled = !args.enabled || desiredListening;
+    startButton.textContent = desiredListening ? "● LISTENING" : "🎙 ACTIVATE LISTENING";
+    stopButton.disabled = !desiredListening && !speaking;
+    if (!args.enabled && desiredListening) stopListening();
+    if (args.busy && desiredListening && !speaking && recognition && recognitionRunning) {
+      setStatus("Smriti is thinking — pausing the mic to avoid capturing unrelated speech.", true);
+      try { recognition.stop(); } catch (_) {}
+    }
+    const wasBusy = previouslyBusy;
+    previouslyBusy = Boolean(args.busy);
+    if (!initialized) {
+      initialized = true;
+      lastSpeechSequence = Number(args.speech_sequence || 0);
+      setStatus(args.enabled ? "Ready. Press Activate to grant mic access and begin." : "Enable LIVE JARVIS and start the camera first.");
+    } else {
+      const sequence = Number(args.speech_sequence || 0);
+      if (sequence > lastSpeechSequence && args.speech_text) {
+        lastSpeechSequence = sequence;
+        speakUpdate(args.speech_text, sequence, args.speech_kind || "reply");
+      }
+      // Recover listening if the model errors out before producing a reply.
+      if (awaitingReply && !args.busy && (wasBusy || args.voice_error)) {
+        awaitingReply = false;
+        setStatus(args.voice_error ? "Reply failed — listening again. Check the notice in the app." : "Ready for your next question.", true);
+      }
+      if (args.enabled && !desiredListening && !speaking && !userStopped) {
+        setStatus("Ready. Press Activate to begin listening.");
+      }
+      if (userStopped) setStatus("Voice link stopped.");
+      if (desiredListening && args.enabled && !args.busy && !speaking && !awaitingReply && !recognitionRunning) {
+        scheduleRestart(250);
+      }
+    }
+    if (args.last_transcript) heardNode.textContent = "Last heard: " + String(args.last_transcript).slice(0, 300);
+    window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: 110}, "*");
+  });
+
+  window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1}, "*");
+})();
+</script>
+</body>
+</html>

@@ -3,3 +3,4 @@ requests>=2.31,<3.0
 Pillow>=10.0,<13.0
 opencv-python-headless==4.14.0.94
 streamlit-webrtc==0.70.1
+psycopg[binary]>=3.2,<4

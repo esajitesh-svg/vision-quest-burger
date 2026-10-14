@@ -26,7 +26,7 @@ import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
 from streamlit_webrtc import VideoHTMLAttributes, WebRtcMode, webrtc_streamer
 
-from core.cloud_db import init_db, list_people, list_memories, save_person, save_memory, search_memories, search_memories_for_voice, export_memories_csv
+from core.cloud_db import (init_db, list_people, list_memories, save_person, save_memory, search_memories, search_memories_for_voice, search_activity_for_voice, save_conversation_turn, list_conversation_turns, save_observation, list_observations, save_person_portrait, get_person_portrait, delete_person_portrait, export_memories_csv, export_activity_csv, has_durable_database)
 from core.cloud_vision import MODE_LABELS, analyze_image, model_status, prepare_image
 from core.realtime_detector import REALTIME_DETECTOR_LABEL, RealtimeYOLOXDetector
 from core.live_report import build_live_report
@@ -173,63 +173,109 @@ def run_live_vision_worker(live_state, sample_bytes: bytes, mode: str, question:
         live_state.finish_analysis(error=f"{type(exc).__name__}: {exc}")
 
 
-def run_live_voice_worker(voice_state, live_state, pcm_clip: bytes) -> None:
-    """Transcribe one detected pause and answer using the newest available camera frame."""
-    try:
-        wav_clip = pcm16_to_wav(pcm_clip)
-        transcript = transcribe_audio(wav_clip, content_type="audio/wav")
-        _, _, frame_count, last_frame_time = live_state.snapshot()
-        image_bytes = None
-        frame_is_recent = (
-            frame_count > 0
-            and last_frame_time > 0
-            and (time.monotonic() - last_frame_time) <= 4.0
-        )
-        if frame_is_recent:
-            image_bytes = live_state.get_latest_analysis_jpeg(max_side=512)
+def answer_live_transcript(voice_state, live_state, transcript: str) -> None:
+    """Answer a final transcript quickly using the newest frame and durable memories."""
+    transcript = (transcript or "").strip()
+    if not transcript:
+        raise ValueError("The recognized speech was empty.")
 
-        live_status = live_state.get_status()
-        # Pair the fresh camera frame with recent local detections and the latest
-        # natural-language observation. This lets voice answers ground themselves
-        # in both the visible frame and the actual detector output, not memory alone.
-        voice_observation = dict(live_status.get("latest_observation") or {})
-        detection_status = live_state.detection_snapshot()
-        detection_age = detection_status.get("age_seconds")
-        detections_are_recent = (
-            isinstance(detection_age, (int, float)) and detection_age <= 5.0
-        )
-        if detections_are_recent:
-            compact_detections = []
-            for item in detection_status.get("detections", [])[:12]:
-                try:
-                    label = str(item.get("label", "")).strip()[:48]
-                    score = max(0.0, min(1.0, float(item.get("score", 0.0))))
-                except (TypeError, ValueError):
-                    continue
-                if label:
-                    compact_detections.append({
-                        "label": label,
-                        "confidence": round(score, 2),
-                    })
-            voice_observation["object_detections"] = compact_detections
-            voice_observation["object_detection_age_seconds"] = round(float(detection_age), 1)
-            voice_observation["object_detection_model"] = str(detection_status.get("model", ""))[:100]
-            voice_observation.setdefault("mode", "live_camera")
-        # Give the assistant the notes most relevant to this utterance rather than
-        # the ten newest notes, which may belong to a completely different topic.
-        relevant_memories = search_memories_for_voice(transcript, limit=10)
-        reply = answer_voice_query(
-            transcript,
-            latest_observation=voice_observation or None,
-            memories=relevant_memories,
-            conversation_history=voice_state.history_snapshot(),
-            live_image_bytes=image_bytes,
-        )
-        voice_state.finish_turn(
+    _, _, frame_count, last_frame_time = live_state.snapshot()
+    frame_is_recent = (
+        frame_count > 0
+        and last_frame_time > 0
+        and (time.monotonic() - last_frame_time) <= 5.0
+    )
+    image_bytes = live_state.get_latest_analysis_jpeg(max_side=448) if frame_is_recent else None
+
+    live_status = live_state.get_status()
+    voice_observation = dict(live_status.get("latest_observation") or {})
+    detection_status = live_state.detection_snapshot()
+    detection_age = detection_status.get("age_seconds")
+    detections_are_recent = isinstance(detection_age, (int, float)) and detection_age <= 5.0
+    if detections_are_recent:
+        compact_detections = []
+        for item in detection_status.get("detections", [])[:12]:
+            try:
+                label = str(item.get("label", "")).strip()[:48]
+                score = max(0.0, min(1.0, float(item.get("score", 0.0))))
+            except (TypeError, ValueError):
+                continue
+            if label:
+                compact_detections.append({"label": label, "confidence": round(score, 2)})
+        voice_observation["object_detections"] = compact_detections
+        voice_observation["object_detection_age_seconds"] = round(float(detection_age), 1)
+        voice_observation["object_detection_model"] = str(detection_status.get("model", ""))[:100]
+        voice_observation.setdefault("mode", "live_camera")
+
+    try:
+        relevant_memories = search_activity_for_voice(transcript, limit=10)
+    except Exception:
+        # Storage outages should not prevent a live answer from being generated.
+        try:
+            relevant_memories = search_memories_for_voice(transcript, limit=8)
+        except Exception:
+            relevant_memories = []
+
+    history = voice_state.history_snapshot()
+    if len(history) < 4:
+        try:
+            saved_history = [
+                {"question": str(row.get("user_text", "")), "reply": str(row.get("assistant_text", ""))}
+                for row in reversed(list_conversation_turns(limit=4))
+            ]
+            # Older persisted turns fill gaps after a browser/app session reset.
+            combined = saved_history + history
+            deduplicated = []
+            seen_turns = set()
+            for turn in combined:
+                marker = (turn["question"], turn["reply"])
+                if marker not in seen_turns:
+                    deduplicated.append(turn)
+                    seen_turns.add(marker)
+            history = deduplicated[-4:]
+        except Exception:
+            pass
+
+    reply = answer_voice_query(
+        transcript,
+        latest_observation=voice_observation or None,
+        memories=relevant_memories,
+        conversation_history=history,
+        live_image_bytes=image_bytes,
+    )
+
+    voice_state.finish_turn(
+        transcript,
+        reply,
+        used_live_camera=image_bytes is not None,
+    )
+    try:
+        save_conversation_turn(
             transcript,
             reply,
+            source="Live JARVIS",
             used_live_camera=image_bytes is not None,
         )
+    except Exception as exc:
+        voice_state.set_warning(
+            "Reply generated, but the long-term conversation log could not be saved: "
+            + f"{type(exc).__name__}: {exc}"
+        )
+
+
+def run_live_voice_text_worker(voice_state, live_state, transcript: str) -> None:
+    """Run model inference off the Streamlit UI thread for browser-recognized speech."""
+    try:
+        answer_live_transcript(voice_state, live_state, transcript)
+    except Exception as exc:
+        voice_state.fail_turn(f"{type(exc).__name__}: {exc}")
+
+
+def run_live_voice_worker(voice_state, live_state, pcm_clip: bytes) -> None:
+    """Fallback path for an already captured audio clip."""
+    try:
+        transcript = transcribe_audio(pcm16_to_wav(pcm_clip), content_type="audio/wav")
+        answer_live_transcript(voice_state, live_state, transcript)
     except Exception as exc:
         voice_state.fail_turn(f"{type(exc).__name__}: {exc}")
 
@@ -239,6 +285,11 @@ st.set_page_config(
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="collapsed",
+)
+
+browser_voice_component = st.components.v1.declare_component(
+    "smriti_browser_voice",
+    path=str(ROOT / "components" / "browser_voice"),
 )
 
 
@@ -359,7 +410,16 @@ def password_gate() -> bool:
 if not password_gate():
     st.stop()
 
-init_db()
+try:
+    init_db()
+except Exception as exc:
+    st.error(
+        "The memory database could not be opened (" + type(exc).__name__ + "). "
+        "Check that DATABASE_URL is correct and the managed PostgreSQL service is reachable. "
+        "The app has not silently switched to another database."
+    )
+    st.stop()
+
 if "live_monitor_state" not in st.session_state:
     st.session_state["live_monitor_state"] = LiveMonitorState()
 live_state: LiveMonitorState = st.session_state["live_monitor_state"]
@@ -391,12 +451,20 @@ if status[0]:
     st.success(status[1])
 else:
     st.warning(status[1])
+if has_durable_database():
+    st.success("LONG-TERM MEMORY STORAGE: managed PostgreSQL is configured.")
+else:
+    st.warning(
+        "LONG-TERM STORAGE IS NOT CONFIGURED: this app is using its local SQLite file. "
+        "Streamlit hosting can reset that file on restart or redeploy. Add DATABASE_URL in hosting Secrets "
+        "for a managed PostgreSQL database; use the Activity Log export as a manual backup until then."
+    )
 st.caption(
     "Privacy notice: the camera stream is processed on the app host. Local object detection runs there using OpenCV DNN; sampled scene-explanation frames and uploaded images are sent to the configured external vision-language provider. "
-    "The app does not intentionally save source photos, but the provider processes the image request. Use fictional test scenes and obtain consent; do not upload private medical or sensitive imagery."
+    "Camera frames and uploaded images are sent to the configured vision provider for analysis, but are not automatically saved as image files. A profile portrait is stored only when you upload it and confirm permission. Use consented photos, and do not upload private medical or highly sensitive imagery."
 )
 
-vision_tab, people_tab, memory_tab, voice_tab, search_tab, settings_tab = st.tabs(["◉ CV WORKSPACE", "PERSON NODES", "MEMORY INDEX", "VOICE I/O", "QUERY", "RUNTIME"])
+vision_tab, people_tab, memory_tab, voice_tab, activity_tab, search_tab, settings_tab = st.tabs(["◉ CV WORKSPACE", "PERSON NODES", "MEMORY INDEX", "VOICE I/O", "ACTIVITY LOG", "QUERY", "RUNTIME"])
 
 with vision_tab:
     live_tab, image_lab_tab = st.tabs(["🎥 LIVE SENSING // WEBCAM", "📸 IMAGE LAB"])
@@ -404,7 +472,7 @@ with vision_tab:
     with live_tab:
         st.markdown("<div class='cv-workbench-label'>01 / LIVE SENSOR INPUT · WEBCAM</div><div class='cv-feed-heading'>LIVE OPTICAL FEED // REAL-TIME CV PIPELINE</div>", unsafe_allow_html=True)
         st.write("VisionQuest prioritizes a responsive live video feed. Local OpenCV DNN object detection runs asynchronously on a recent frame instead of blocking every video frame; boxes update periodically and disappear when too old. A separate hosted vision-language model explains sampled scenes.")
-        st.caption("Smooth-first defaults: Standard 640×360 at about 10 FPS, with automatic scene analysis and local object detection initially off. Turn either on only when needed. HD and Full HD remain selectable for more detail; hosted AI analysis can still take time after you request it. Use consented test scenes.")
+        st.caption("Smooth-first camera feed. Browser-native speech recognition captures spoken turns without sending each clip through a second hosted transcription call. Scene descriptions and chat summaries can be stored in the Activity Log; continuous video/audio is not recorded.")
         st.markdown(
             "<div class='cv-workbench-label'>02 / JARVIS VOICE LINK · LIVE COMPANION</div>",
             unsafe_allow_html=True,
@@ -416,7 +484,7 @@ with vision_tab:
                 value=False,
                 disabled=not status[0],
                 key="live_jarvis_voice_enabled",
-                help="Explicitly enables microphone input while the camera session is running. After switching this on, STOP and START the camera again and allow microphone permission.",
+                help="Enables the browser-native voice panel. Start the camera, then press ACTIVATE LISTENING and allow microphone permission when asked. No camera restart is required.",
             )
         with voice_cols[1]:
             live_voice_narrate_scenes = st.checkbox(
@@ -432,9 +500,16 @@ with vision_tab:
         )
         if live_voice_enabled:
             st.info(
-                "JARVIS MODE IS OPT-IN: your microphone is active only during the running camera session. "
-                "After turning this on, STOP and START the camera once and allow mic access. Click STOP to end listening."
+                "JARVIS MODE IS OPT-IN: browser microphone listening starts only after you press ACTIVATE LISTENING below. "
+                "The voice link pauses while Smriti speaks. Press STOP to end listening."
             )
+        live_auto_save_observations = st.checkbox(
+            "Remember completed camera observations in the long-term Activity Log",
+            value=True,
+            key="live_save_observation_log",
+            disabled=not status[0],
+            help="Saves text descriptions after AI analysis finishes; it does not store continuous video or raw microphone audio. Text from live voice conversations is also logged when live JARVIS is enabled.",
+        )
 
         with st.expander("⚙️ PERCEPTION / CAMERA CONTROLS", expanded=False):
             live_auto_analyze = st.checkbox(
@@ -607,65 +682,6 @@ with vision_tab:
                 "credential": turn_credential,
             })
 
-        audio_resampler = None
-        if live_voice_enabled:
-            if "live_jarvis_audio_resampler" not in st.session_state:
-                st.session_state["live_jarvis_audio_resampler"] = av.AudioResampler(
-                    format="s16",
-                    layout="mono",
-                    rate=16000,
-                )
-            audio_resampler = st.session_state["live_jarvis_audio_resampler"]
-
-        def on_live_audio_frame(frame):
-            """Continuously receive mic frames, detect speech pauses, and queue short turns."""
-            try:
-                live_voice_state.note_audio_frame()
-                if audio_resampler is not None:
-                    for resampled in audio_resampler.resample(frame):
-                        samples = resampled.to_ndarray().reshape(-1).astype(np.int16, copy=False)
-                        completed_pcm = live_voice_state.ingest_pcm(samples, sample_rate=16000)
-                        if completed_pcm is not None:
-                            if live_voice_state.begin_processing():
-                                try:
-                                    Thread(
-                                        target=run_live_voice_worker,
-                                        args=(live_voice_state, live_state, completed_pcm),
-                                        daemon=True,
-                                    ).start()
-                                except Exception as exc:
-                                    live_voice_state.fail_turn(
-                                        f"Could not start voice worker: {type(exc).__name__}: {exc}"
-                                    )
-            except Exception as exc:
-                live_voice_state.fail_turn(
-                    f"Microphone frame error: {type(exc).__name__}: {exc}"
-                )
-            # Do not loop the microphone audio back to the visitor.
-            try:
-                silence = np.zeros_like(frame.to_ndarray())
-                muted_frame = av.AudioFrame.from_ndarray(
-                    silence,
-                    format=frame.format.name,
-                    layout=frame.layout.name,
-                )
-                muted_frame.sample_rate = frame.sample_rate
-                muted_frame.pts = frame.pts
-                muted_frame.time_base = frame.time_base
-                return muted_frame
-            except Exception:
-                # Last-resort muting preserves the original frame's audio format.
-                # Never intentionally pass the captured microphone audio back out.
-                try:
-                    for plane in frame.planes:
-                        plane.update(bytes(plane.buffer_size))
-                    return frame
-                except Exception as mute_error:
-                    live_voice_state.fail_turn(
-                        f"Could not safely mute the outgoing microphone track: {type(mute_error).__name__}: {mute_error}"
-                    )
-                    return frame
-
         def on_live_media_ended():
             live_state.close()
             live_voice_state.set_streaming(False)
@@ -798,16 +814,9 @@ with vision_tab:
                         "height": {"ideal": live_capture_height},
                         "frameRate": {"ideal": 10, "max": 12},
                     },
-                    "audio": (
-                        {
-                            "echoCancellation": True,
-                            "noiseSuppression": True,
-                            "autoGainControl": True,
-                        }
-                        if live_voice_enabled else False
-                    ),
+                    "audio": False,
                 },
-                audio_frame_callback=on_live_audio_frame if live_voice_enabled else None,
+                audio_frame_callback=None,
                 async_processing=True,
                 on_video_ended=on_live_media_ended,
                 video_html_attrs=VideoHTMLAttributes(
@@ -889,38 +898,66 @@ with vision_tab:
                 live_voice_state.set_streaming(bool(is_playing and live_voice_enabled))
                 voice_snapshot = live_voice_state.snapshot()
 
-                # Keep the player HTML stable across the one-second fragment refreshes.
-                # It is rebuilt only when a new reply/narration arrives; the browser iframe
-                # keeps speaking and also retains its visible replay/stop controls.
-                previous_reply_sequence = int(
-                    st.session_state.get("live_jarvis_seen_reply_sequence", 0)
-                )
-                reply_is_new = voice_snapshot["reply_sequence"] > previous_reply_sequence
                 latest_observation = current_status.get("latest_observation")
-                previous_observation_sequence = int(
-                    st.session_state.get("live_jarvis_seen_observation_sequence", 0)
-                )
                 observation_sequence = (
                     int(latest_observation.get("sequence", 0))
                     if latest_observation else 0
                 )
 
+                # Persist each completed natural-language observation once, when the
+                # user has enabled long-term text memory. Never save every video frame.
+                previous_logged_sequence = int(
+                    st.session_state.get("live_jarvis_saved_observation_sequence", 0)
+                )
+                if observation_sequence > previous_logged_sequence and latest_observation:
+                    st.session_state["live_jarvis_saved_observation_sequence"] = observation_sequence
+                    observation_text = str(latest_observation.get("text", "")).strip()
+                    if live_auto_save_observations and observation_text:
+                        detection_status_for_memory = live_state.detection_snapshot()
+                        detection_age_for_memory = detection_status_for_memory.get("age_seconds")
+                        if isinstance(detection_age_for_memory, (int, float)) and detection_age_for_memory <= 2.5:
+                            labels = [
+                                str(item.get("label", "")).strip()
+                                for item in detection_status_for_memory.get("detections", [])[:12]
+                                if str(item.get("label", "")).strip()
+                            ]
+                            if labels:
+                                observation_text += "\nRecent object detector labels (may be incomplete): " + ", ".join(labels)
+                        try:
+                            save_observation(
+                                observation_text,
+                                source="Live camera",
+                                model=str(latest_observation.get("model", "")),
+                                observed_at=str(latest_observation.get("timestamp", "")),
+                                frame_hash=str(latest_observation.get("source_hash", "")),
+                            )
+                        except Exception as exc:
+                            st.warning(
+                                "The scene was analyzed, but its long-term log entry could not be saved: "
+                                + f"{type(exc).__name__}: {exc}"
+                            )
+
+                # Build a single browser-native speech queue for both replies and
+                # camera narration. It stays inside this one stable component, avoiding
+                # the fresh-iframe autoplay problem of rebuilding HTML audio players.
+                previous_reply_sequence = int(
+                    st.session_state.get("live_jarvis_seen_reply_sequence", 0)
+                )
+                reply_is_new = voice_snapshot["reply_sequence"] > previous_reply_sequence
+                previous_observation_sequence = int(
+                    st.session_state.get("live_jarvis_seen_observation_sequence", 0)
+                )
+
                 if live_voice_enabled and reply_is_new:
                     st.session_state["live_jarvis_seen_reply_sequence"] = voice_snapshot["reply_sequence"]
-                    speech_text = voice_snapshot["latest_reply"]
-                    speech_language = st.session_state.get("voice_language", "en-IN")
-                    speech_rate = float(st.session_state.get("voice_rate", 0.92))
-                    st.session_state["live_jarvis_speech_html"] = build_speech_html(
-                        speech_text,
-                        language=speech_language,
-                        rate=speech_rate,
-                        widget_label="🔊 REPLAY JARVIS REPLY",
-                        autoplay=True,
-                    )
-                    st.session_state["live_jarvis_speech_kind"] = "reply"
-                    st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
-                    # Leave newer camera observations queued; the reply takes priority
-                    # now, and any pending narration may speak after the cooldown.
+                    speech_text = str(voice_snapshot["latest_reply"]).strip()
+                    if speech_text:
+                        st.session_state["live_jarvis_browser_speech_text"] = speech_text
+                        st.session_state["live_jarvis_browser_speech_kind"] = "reply"
+                        st.session_state["live_jarvis_browser_speech_sequence"] = int(
+                            st.session_state.get("live_jarvis_browser_speech_sequence", 0)
+                        ) + 1
+                        st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
                 elif (
                     live_voice_enabled
                     and live_voice_narrate_scenes
@@ -931,30 +968,56 @@ with vision_tab:
                         assistant_processing=bool(voice_snapshot["processing"]),
                         last_spoken_at=float(st.session_state.get("live_jarvis_last_spoken_at", 0.0)),
                         now=time.monotonic(),
+                        cooldown_seconds=8.0,
                     )
                 ):
                     narration_text = str(latest_observation.get("text", "")).strip()
                     if not narration_text:
-                        # Empty observations have nothing useful to speak; consume them
-                        # to avoid retrying the same empty result on each UI refresh.
                         st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
                     else:
-                        try:
-                            speech_language = st.session_state.get("voice_language", "en-IN")
-                            speech_rate = float(st.session_state.get("voice_rate", 0.92))
-                            st.session_state["live_jarvis_speech_html"] = build_speech_html(
-                                narration_text,
-                                language=speech_language,
-                                rate=speech_rate,
-                                widget_label="🔊 REPLAY CAMERA DESCRIPTION",
-                                autoplay=True,
-                            )
-                            st.session_state["live_jarvis_speech_kind"] = "camera narration"
-                            st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
-                            # Consume the observation only after the speech is prepared.
-                            st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
-                        except ValueError:
-                            st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
+                        st.session_state["live_jarvis_browser_speech_text"] = narration_text
+                        st.session_state["live_jarvis_browser_speech_kind"] = "camera narration"
+                        st.session_state["live_jarvis_browser_speech_sequence"] = int(
+                            st.session_state.get("live_jarvis_browser_speech_sequence", 0)
+                        ) + 1
+                        st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
+                        st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
+
+                # SpeechRecognition runs in the browser after a clear user gesture.
+                # This removes the extra Whisper network hop from the live conversation
+                # path; the AI reply still depends on the hosted model and internet.
+                if live_voice_enabled:
+                    voice_event = browser_voice_component(
+                        enabled=bool(is_playing and live_voice_enabled and status[0]),
+                        busy=bool(voice_snapshot["processing"]),
+                        language=st.session_state.get("voice_language", "en-IN"),
+                        rate=float(st.session_state.get("voice_rate", 0.92)),
+                        speech_text=st.session_state.get("live_jarvis_browser_speech_text", ""),
+                        speech_sequence=int(st.session_state.get("live_jarvis_browser_speech_sequence", 0)),
+                        speech_kind=st.session_state.get("live_jarvis_browser_speech_kind", "reply"),
+                        last_transcript=voice_snapshot.get("latest_transcript", ""),
+                        voice_error=voice_snapshot.get("error", ""),
+                        key="smriti_live_browser_voice",
+                        default=None,
+                    )
+                    if isinstance(voice_event, dict) and voice_event.get("event") == "transcript":
+                        event_id = str(voice_event.get("event_id", ""))
+                        transcript = str(voice_event.get("transcript", "")).strip()
+                        previous_event_id = st.session_state.get("live_jarvis_last_browser_event_id", "")
+                        if event_id and event_id != previous_event_id and transcript:
+                            st.session_state["live_jarvis_last_browser_event_id"] = event_id
+                            if live_voice_state.begin_processing():
+                                try:
+                                    Thread(
+                                        target=run_live_voice_text_worker,
+                                        args=(live_voice_state, live_state, transcript),
+                                        daemon=True,
+                                    ).start()
+                                except Exception as exc:
+                                    live_voice_state.fail_turn(
+                                        f"Could not start reply worker: {type(exc).__name__}: {exc}"
+                                    )
+                voice_snapshot = live_voice_state.snapshot()
 
                 if not is_playing:
                     st.info("Live monitor is idle. Click START in the camera player above and allow browser camera permission.")
@@ -964,22 +1027,16 @@ with vision_tab:
                     st.info("Waiting for the first camera frame…")
 
                 if live_voice_enabled:
-                    audio_age = voice_snapshot.get("audio_age_seconds")
-                    audio_recent = (
-                        isinstance(audio_age, (int, float)) and audio_age <= 3.0
-                    )
-                    if is_playing and audio_recent:
-                        st.success("🎙️ LIVE JARVIS MICROPHONE CONNECTED · speak naturally, then pause briefly for a reply")
-                    elif is_playing:
-                        st.warning(
-                            "Camera is running, but no recent microphone frames reached the server. "
-                            "Check browser microphone permission, then STOP and START the camera again."
-                        )
+                    if is_playing:
+                        st.success("🎙 LIVE JARVIS READY · activate listening in the voice panel above, then speak naturally")
                     else:
-                        st.warning("LIVE JARVIS is enabled in settings. STOP/START the camera and approve microphone permission.")
-                    st.caption(f"Voice status: {voice_snapshot['status']}")
+                        st.warning("Start the camera first, then activate the browser voice panel. Press STOP in the voice panel to end listening.")
+                    st.caption(
+                        "AI status: generating a reply…" if voice_snapshot["processing"]
+                        else ("Reply completed." if voice_snapshot["latest_reply"] else "Ready for your first spoken question.")
+                    )
                     if voice_snapshot["error"]:
-                        st.warning(f"Voice assistant: {voice_snapshot['error']}")
+                        st.warning(f"Smriti notice: {voice_snapshot['error']}")
                     if voice_snapshot["latest_transcript"]:
                         st.markdown(f"**You:** {escape(voice_snapshot['latest_transcript'])}")
                     if voice_snapshot["latest_reply"]:
@@ -988,18 +1045,15 @@ with vision_tab:
                             unsafe_allow_html=True,
                         )
                         if voice_snapshot["used_live_camera"]:
-                            st.caption("This reply used a recent live camera frame.")
-                    speech_html = st.session_state.get("live_jarvis_speech_html", "")
-                    if speech_html:
-                        st.components.v1.html(speech_html, height=100, scrolling=False)
+                            st.caption("This reply used a fresh live camera frame.")
                     if live_voice_narrate_scenes:
                         st.caption(
-                            f"Camera narration is on · new scene descriptions target every {live_interval} seconds. "
-                            "Actual timing depends on cloud inference and network latency."
+                            f"Camera narration is enabled · target interval {live_interval} seconds. "
+                            "The cloud vision model can take longer than the target interval."
                         )
                     st.caption(
-                        "Voice clips are assembled in memory and submitted after about 0.75 seconds of silence. "
-                        "The microphone remains active until you stop the WebRTC session."
+                        "Voice transcripts and replies are stored in the Activity Log while live JARVIS is enabled. "
+                        "Raw microphone audio and continuous video are not stored by this feature."
                     )
 
                 if snapshot_jpeg:
@@ -1329,6 +1383,19 @@ with vision_tab:
                         "source_hash": hashlib.sha256(image_bytes).hexdigest(),
                         "opencv_enabled": bool(use_opencv), "opencv_metrics": cv_metrics,
                     }
+                    try:
+                        save_observation(
+                            result.text,
+                            source="Image Lab",
+                            model=result.model,
+                            observed_at=st.session_state["latest_result"]["timestamp"],
+                            frame_hash=st.session_state["latest_result"]["source_hash"],
+                        )
+                    except Exception as storage_exc:
+                        st.warning(
+                            "Image analyzed successfully, but its text summary could not be added to Activity Log: "
+                            + f"{type(storage_exc).__name__}: {storage_exc}"
+                        )
                     st.success(f"Analysis completed in {result.elapsed_seconds:.1f} seconds · {result.model}")
                 except Exception as exc:
                     st.error(f"Vision analysis failed: {exc}")
@@ -1398,6 +1465,60 @@ with people_tab:
     current_people = list_people()
     if current_people:
         st.dataframe([{"Name": p["name"], "Label": p["relationship"], "Notes": p["notes"], "Added": p["created_at"]} for p in current_people], use_container_width=True, hide_index=True)
+        st.markdown("### Consent-based portrait memory")
+        st.caption(
+            "Save a portrait supplied by you, attached to a named profile for human reference. "
+            "Smriti does not match faces or infer identity from a camera image; confirm a person's name yourself. "
+            "Portrait files are stored in the configured database and can be removed below."
+        )
+        portrait_labels = {p["id"]: f'{p["name"]} — {p["relationship"]}' for p in current_people}
+        portrait_person_id = st.selectbox(
+            "Profile for reference portrait",
+            list(portrait_labels),
+            format_func=lambda pid: portrait_labels[pid],
+            key="portrait_profile_id",
+        )
+        portrait_file = st.file_uploader(
+            "Choose a portrait (JPEG, PNG, WEBP; 3 MB maximum)",
+            type=["jpg", "jpeg", "png", "webp"],
+            key="person_portrait_upload",
+        )
+        portrait_consent = st.checkbox(
+            "I have permission to store this person's portrait in this profile.",
+            key="portrait_storage_consent",
+        )
+        if st.button("Save consented portrait", key="save_person_portrait_button", type="primary"):
+            if not portrait_consent:
+                st.warning("Confirm permission before storing a portrait.")
+            elif portrait_file is None:
+                st.warning("Choose an image first.")
+            else:
+                mime = portrait_file.type or {
+                    "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "png": "image/png", "webp": "image/webp",
+                }.get(portrait_file.name.rsplit(".", 1)[-1].lower(), "")
+                try:
+                    save_person_portrait(portrait_person_id, portrait_file.getvalue(), mime)
+                    st.success("Reference portrait saved to the selected profile.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Portrait could not be saved: {exc}")
+        existing_portrait = get_person_portrait(portrait_person_id)
+        if existing_portrait:
+            st.image(
+                bytes(existing_portrait["image_data"]),
+                caption=f"Reference portrait · {portrait_labels[portrait_person_id]} · updated {existing_portrait['updated_at']}",
+                width=240,
+            )
+            if st.button("Remove stored portrait", key="remove_person_portrait_button"):
+                try:
+                    delete_person_portrait(portrait_person_id)
+                    st.success("Portrait removed from the configured database.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Portrait could not be removed: {exc}")
+        else:
+            st.caption("No portrait is stored for this profile.")
     else:
         st.info("No people added yet.")
 
@@ -1431,7 +1552,7 @@ with memory_tab:
 with voice_tab:
     st.subheader("JARVIS-STYLE VOICE COMPANION")
     st.write("Talk in turns: ask a question, get a reply spoken in the same browser voice this website already uses, then record your next question. Recent conversation turns are retained during this browser session so follow-up questions can make sense.")
-    st.warning("This is turn-based recording, not an always-open microphone. When you finish a recording, that audio clip is sent to Hugging Face for transcription; your question and relevant context go to the hosted model. Audio and transcripts are not automatically stored as memory.")
+    st.warning("This is a record-then-reply fallback, not the live microphone experience. The audio clip is sent to Hugging Face for transcription; the resulting text and reply are saved to the Activity Log when storage is available. Raw audio is not saved by this feature.")
     voice_language_col, voice_rate_col = st.columns([1, 1])
     with voice_language_col:
         st.selectbox(
@@ -1498,8 +1619,16 @@ with voice_tab:
                                 max_side=512,
                             )
                             voice_frame_reserved = live_image_bytes is not None
-                    recent_memory_context = list_memories(limit=10)
+                    recent_memory_context = search_activity_for_voice(transcript, limit=10)
                     prior_turns = st.session_state.get("voice_chat_history", [])[-4:]
+                    if not prior_turns:
+                        try:
+                            prior_turns = [
+                                {"question": str(row.get("user_text", "")), "reply": str(row.get("assistant_text", ""))}
+                                for row in reversed(list_conversation_turns(limit=4))
+                            ]
+                        except Exception:
+                            prior_turns = []
                     reply = answer_voice_query(
                         transcript,
                         latest_observation=live_context,
@@ -1510,6 +1639,18 @@ with voice_tab:
                 st.session_state["voice_latest_transcript"] = transcript
                 st.session_state["voice_latest_reply"] = reply
                 st.session_state["voice_latest_used_live_camera"] = live_image_bytes is not None
+                try:
+                    save_conversation_turn(
+                        transcript,
+                        reply,
+                        source="VOICE I/O recording",
+                        used_live_camera=live_image_bytes is not None,
+                    )
+                except Exception as storage_exc:
+                    st.warning(
+                        "Reply generated, but the conversation was not saved to long-term memory: "
+                        + f"{type(storage_exc).__name__}: {storage_exc}"
+                    )
                 st.session_state["voice_auto_speak_pending"] = bool(auto_speak_reply)
                 history = st.session_state.get("voice_chat_history", [])
                 history.append({"question": transcript, "reply": reply})
@@ -1620,6 +1761,70 @@ with voice_tab:
     else:
         st.info("Enter text or load an observation or saved note. Then tap Speak text in the player.")
     st.caption("Tip: Chrome and Edge generally have broad Web Speech API support. Available voices are provided by your device/browser and can differ by language. Spoken replies require a click on Speak reply.")
+
+with activity_tab:
+    st.subheader("Long-term activity memory")
+    st.write(
+        "This log stores completed voice turns and text summaries of scenes that were analyzed. "
+        "It does not store continuous camera video or raw microphone audio."
+    )
+    if has_durable_database():
+        st.success("Managed PostgreSQL is configured for persistence across normal app restarts.")
+    else:
+        st.warning(
+            "The current log is in local SQLite and may be lost when the hosting instance is reset. "
+            "Set DATABASE_URL in hosting Secrets to use managed PostgreSQL for durable storage."
+        )
+
+    try:
+        activity_turns = list_conversation_turns(limit=250)
+        activity_observations = list_observations(limit=250)
+        left_count, right_count = st.columns(2)
+        left_count.metric("Saved conversation turns", len(activity_turns))
+        right_count.metric("Saved observations", len(activity_observations))
+
+        export_data = export_activity_csv()
+        st.download_button(
+            "⬇ Export activity backup (CSV)",
+            data=export_data,
+            file_name="smriti_activity_backup.csv",
+            mime="text/csv",
+            type="primary",
+            key="export_activity_backup",
+            help="Download saved conversation text and scene summaries so you can keep an independent backup.",
+        )
+
+        conversation_rows = [
+            {
+                "Saved at": row.get("created_at", ""),
+                "Source": row.get("source", ""),
+                "You said": row.get("user_text", ""),
+                "Smriti replied": row.get("assistant_text", ""),
+                "Live camera used": bool(row.get("used_live_camera")),
+            }
+            for row in activity_turns
+        ]
+        observation_rows = [
+            {
+                "Observed at": row.get("observed_at", row.get("created_at", "")),
+                "Source": row.get("source", ""),
+                "Model": row.get("model", ""),
+                "Summary": row.get("note", ""),
+            }
+            for row in activity_observations
+        ]
+        with st.expander("Recent conversation history", expanded=True):
+            if conversation_rows:
+                st.dataframe(conversation_rows, use_container_width=True, hide_index=True)
+            else:
+                st.info("No conversation turns have been saved yet.")
+        with st.expander("Recent scene observations and analyses", expanded=True):
+            if observation_rows:
+                st.dataframe(observation_rows, use_container_width=True, hide_index=True)
+            else:
+                st.info("No completed live observations have been saved yet.")
+    except Exception as exc:
+        st.error(f"Activity memory is not available: {type(exc).__name__}: {exc}")
 
 with search_tab:
     st.subheader("Search saved memories")

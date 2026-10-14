@@ -71,7 +71,7 @@ def test_voice_reply_uses_scene_and_memory_context(monkeypatch):
 
     assert result == "The latest note says the keys are on the desk."
     assert calls["url"] == voice.CHAT_URL
-    assert calls["payload"]["max_tokens"] == 180
+    assert calls["payload"]["max_tokens"] == 140
     user_content = calls["payload"]["messages"][1]["content"]
     assert isinstance(user_content, list)
     text_part = next(part["text"] for part in user_content if part.get("type") == "text")
