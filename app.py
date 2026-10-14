@@ -36,6 +36,7 @@ from core.voice import SUPPORTED_LANGUAGES, build_speech_html
 from core.cloud_voice import transcribe_audio, answer_voice_query
 from core.live_voice import LiveVoiceAssistantState, pcm16_to_wav, should_narrate_observation
 from core.demo_mode import render_demo_hub
+from core.face_recognition import decode_image_bytes, face_recognizer_available, recognize_faces
 
 ROOT = Path(__file__).resolve().parent
 
@@ -1586,9 +1587,9 @@ with people_tab:
         st.dataframe([{"Name": p["name"], "Label": p["relationship"], "Notes": p["notes"], "Added": p["created_at"]} for p in current_people], use_container_width=True, hide_index=True)
         st.markdown("### Consent-based portrait memory")
         st.caption(
-            "Save a portrait supplied by you, attached to a named profile for human reference. "
-            "Smriti does not match faces or infer identity from a camera image; confirm a person's name yourself. "
-            "Portrait files are stored in the configured database and can be removed below."
+            "Save a portrait supplied with permission to a named profile. The recognition test below compares a test photo "
+            "only with these registered reference portraits; uncertain matches are labelled Unknown. This experimental feature "
+            "can make mistakes and must not be used for access control or safety-critical decisions."
         )
         portrait_labels = {p["id"]: f'{p["name"]} — {p["relationship"]}' for p in current_people}
         portrait_person_id = st.selectbox(
@@ -1638,6 +1639,44 @@ with people_tab:
                     st.error(f"Portrait could not be removed: {exc}")
         else:
             st.caption("No portrait is stored for this profile.")
+
+        st.markdown("### Face recognition test")
+        if not face_recognizer_available():
+            st.error("Face matching is unavailable. Install the OpenCV contrib dependency from requirements.txt and restart the app.")
+        else:
+            capture_tab, upload_tab = st.tabs(["📸 Capture a test photo", "📁 Upload a test photo"])
+            with capture_tab:
+                face_capture = st.camera_input("Capture a test photo", key="people_face_capture")
+            with upload_tab:
+                face_upload = st.file_uploader(
+                    "Test photo (JPEG, PNG, WEBP)",
+                    type=["jpg", "jpeg", "png", "webp"],
+                    key="people_face_test_upload",
+                )
+            test_photo = face_capture if face_capture is not None else face_upload
+            st.caption("The test photo is processed by this app's Python runtime and compared with portraits you previously registered with permission.")
+            if st.button("Recognize registered faces", key="recognize_registered_faces", type="primary", disabled=test_photo is None):
+                try:
+                    test_frame = decode_image_bytes(test_photo.getvalue())
+                    annotated_frame, matches = recognize_faces(test_frame, current_people, get_person_portrait)
+                    st.session_state["registered_face_match_result"] = {
+                        "image": cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB),
+                        "matches": matches,
+                    }
+                except Exception as exc:
+                    st.session_state.pop("registered_face_match_result", None)
+                    st.error(f"Face recognition failed: {type(exc).__name__}: {exc}")
+            match_result = st.session_state.get("registered_face_match_result")
+            if match_result:
+                st.image(match_result["image"], caption="Detected faces and registered match results", use_container_width=True)
+                if not match_result["matches"]:
+                    st.info("No face was detected in the test photo.")
+                for face_match in match_result["matches"]:
+                    if face_match["recognized"]:
+                        st.success(f"Possible match: {face_match['name']} · experimental distance {face_match['distance']}")
+                    else:
+                        st.info(f"Unknown person · no sufficiently close match (distance {face_match['distance']})")
+                st.caption("Confirm the result with the person. This lightweight matcher is experimental and may confuse people or fail under changed lighting, angle, or expression.")
     else:
         st.info("No people added yet.")
 
