@@ -261,9 +261,10 @@ button:disabled{opacity:.38;cursor:not-allowed}
         awaitingReply = false;
         setStatus(args.voice_error ? "Reply failed — listening again. Check the notice in the app." : "Ready for your next question.", true);
       }
-      if (args.enabled && !desiredListening && !speaking) {
+      if (args.enabled && !desiredListening && !speaking && !userStopped) {
         setStatus("Ready. Press Activate to begin listening.");
       }
+      if (userStopped) setStatus("Voice link stopped.");
       if (desiredListening && args.enabled && !args.busy && !speaking && !awaitingReply && !recognitionRunning) {
         scheduleRestart(250);
       }
