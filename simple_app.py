@@ -265,45 +265,74 @@ with r:
 
  render_live_analyser()
 
-@st.fragment(run_every=5)
+@st.fragment(run_every=1)
 def render_live_observer():
  with st.expander("05 / LIVE OBSERVER // GRANITE VISION", expanded=True):
-  st.caption("Smriti's observer describes the newest webcam frame with local Granite Vision. Enable periodic scene observations or trigger one manually. Automatic observations are off by default.")
-  auto_observe = st.checkbox("Enable automatic scene observation",value=False,key="smriti_auto_observer")
-  interval = st.select_slider("Observation interval",options=[15,30,60],value=30,format_func=lambda n:f"Every {n} seconds",key="smriti_observer_interval")
-  run_now = st.button("OBSERVE CURRENT FRAME NOW",use_container_width=True,key="smriti_observe_now")
+  st.caption("Automatic observation checks for a new frame every second. Granite runs in a background worker; if inference takes longer than one second, new frames are skipped until it finishes instead of building a backlog.")
+  auto_observe = st.checkbox("Enable automatic observation every second", value=True, key="smriti_auto_observer")
+  run_now = st.button("OBSERVE CURRENT FRAME NOW", use_container_width=True, key="smriti_observe_now")
   now = time.monotonic()
-  due = auto_observe and (now-float(st.session_state.get("observer_last_run_monotonic",0.0)) >= interval)
-  if run_now or due:
+  observer_state = st.session_state.observer_state
+
+  with observer_state.lock:
+   busy = observer_state.busy
+   last_started = observer_state.last_started
+
+  should_start = run_now or (auto_observe and not busy and now - last_started >= 1.0)
+  if should_start and not busy:
    with st.session_state.cam_state.lock:
-    observer_frame = st.session_state.cam_state.frame.copy() if st.session_state.cam_state.frame is not None else None
-    frame_age = now-st.session_state.cam_state.updated_at if st.session_state.cam_state.updated_at else 9999.0
-   if observer_frame is None or frame_age > 5.0:
-    st.warning("No fresh live camera frame is available. Start the camera, wait for video, and try again.")
+    frame = st.session_state.cam_state.frame.copy() if st.session_state.cam_state.frame is not None else None
+    updated_at = st.session_state.cam_state.updated_at
+   frame_age = now - updated_at if updated_at else 9999.0
+
+   if frame is None or frame_age > 5.0:
+    st.info("Waiting for a fresh webcam frame. Start the camera and leave the feed running.")
    else:
-    st.session_state.observer_last_run_monotonic = now
-    try:
-     with st.spinner("Live Observer is analysing the current frame with local Granite…"):
-      ok, encoded = cv2.imencode(".jpg",observer_frame,[int(cv2.IMWRITE_JPEG_QUALITY),82])
-      if not ok:
-       raise RuntimeError("OpenCV could not encode the current camera frame.")
-      image_bytes = encoded.tobytes()
-      result = analyze_with_granite(image_bytes,mode="auto_observe",max_side=768)
-     st.session_state.analysis = result.text
-     st.session_state.analysis_time = datetime.now().strftime("%H:%M:%S")
-     st.session_state.status = f"OBSERVER COMPLETE · {result.elapsed_seconds:.1f}s"
-     try:
-      save_observation(result.text,source="Smriti local Live Observer",model=result.model,frame_hash=hashlib.sha256(image_bytes).hexdigest())
-     except Exception as save_exc:
-      st.warning(f"Observation was generated, but memory logging failed: {type(save_exc).__name__}: {save_exc}")
-    except Exception as observer_exc:
-     st.session_state.status = "OBSERVER ERROR"
-     st.error(f"Live Observer failed: {type(observer_exc).__name__}: {observer_exc}")
+    ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+    if not ok:
+     st.error("OpenCV could not encode the current camera frame.")
+    else:
+     with observer_state.lock:
+      if not observer_state.busy and (run_now or now - observer_state.last_started >= 1.0):
+       observer_state.busy = True
+       observer_state.last_started = now
+       launch = True
+      else:
+       launch = False
+     if launch:
+      try:
+       threading.Thread(
+        target=run_observer_worker,
+        args=(observer_state, encoded.tobytes()),
+        daemon=True,
+        name="smriti-live-observer",
+       ).start()
+      except Exception as exc:
+       with observer_state.lock:
+        observer_state.busy = False
+        observer_state.status = "OBSERVER ERROR"
+        observer_state.error = f"Could not start observer worker: {type(exc).__name__}: {exc}"
+  elif run_now and busy:
+   st.info("The current frame is still being analysed. Please wait for this result; another request will not be queued.")
+
+  with observer_state.lock:
+   busy = observer_state.busy
+   latest_text = observer_state.text
+   time_label = observer_state.time_label
+   status = observer_state.status
+   error = observer_state.error
+   elapsed = observer_state.elapsed_seconds
+
+  if busy:
+   st.info("Observer is analysing the latest frame in the background. It will pick up a new frame when this analysis finishes.")
+  if error:
+   st.warning(error)
   st.markdown("**LATEST LIVE OBSERVATION**")
-  st.write(st.session_state.analysis)
-  st.caption(f"Last observation: {st.session_state.analysis_time} · {st.session_state.status}")
+  st.write(latest_text)
+  st.caption(f"{status} · Last completed observation: {time_label}" + (f" · {elapsed:.1f}s inference" if elapsed else ""))
 
 render_live_observer()
+
 
 with st.expander("06 / FACE RECOGNITION — LOCAL ENROLMENT", expanded=False):
  st.write("Register a reference portrait with the person's permission, then compare faces in the current live camera frame. Portraits are stored in the configured app database and shared with Demo Mode.")
