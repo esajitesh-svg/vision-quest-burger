@@ -88,6 +88,25 @@ def render_demo_hub() -> None:
         get_person_portrait,
         delete_person_portrait,
     )
+    from core.local_archive import archive_event, save_media
+    from pathlib import Path
+    import base64
+
+
+    def archive_tags():
+        return {
+            "people": st.session_state.get("archive_people_tags", ""),
+            "place": st.session_state.get("archive_place_tag", ""),
+            "activity": st.session_state.get("archive_activity_tag", ""),
+        }
+
+    def archive_demo_event(event_type, payload):
+        if not st.session_state.get("archive_auto_save", True):
+            return
+        try:
+            archive_event(event_type, payload, archive_tags())
+        except Exception as archive_exc:
+            st.warning(f"Local demo archive failed: {type(archive_exc).__name__}: {archive_exc}")
 
     st.markdown(
         """
@@ -118,6 +137,10 @@ def render_demo_hub() -> None:
             st.caption("DEMO RESPONSE ENGINE · NO CLOUD AI REQUESTS")
             if st.button("Generate sample scene observation", type="primary", use_container_width=True):
                 st.session_state["demo_observation"] = demo_observation(False)
+                archive_demo_event("demo_sample_observation", {
+                    "observation": st.session_state["demo_observation"],
+                    "simulated": True,
+                })
             st.info(st.session_state.get("demo_observation", "Press the button to display a fictional sample observation."))
             st.caption("This sample is not generated from your camera.")
         with right:
@@ -131,6 +154,12 @@ def render_demo_hub() -> None:
                 asked = st.form_submit_button("ASK SMRITI", type="primary", use_container_width=True)
             if asked:
                 st.session_state["demo_reply"] = demo_reply(question)
+                archive_demo_event("conversation_turn", {
+                    "question": str(question or "")[:1200],
+                    "answer": st.session_state["demo_reply"],
+                    "mode": "DEMO MODE",
+                    "simulated": True,
+                })
             reply = st.session_state.get("demo_reply", "Hello! Demo Mode is ready. Ask a question to see a sample reply.")
             st.markdown(
                 "<div style='padding:1rem;background:#091a22;border-left:3px solid #42e9d7;border-radius:6px'>"
@@ -148,6 +177,44 @@ def render_demo_hub() -> None:
                 )
             except Exception:
                 st.caption("Browser speech controls are unavailable in this deployment.")
+
+            # Raw microphone audio recording is optional and requires a direct user click.
+            try:
+                voice_component = st.components.v1.declare_component(
+                    "smriti_demo_audio_archive",
+                    path=str(Path(__file__).resolve().parents[1] / "components" / "browser_voice"),
+                )
+                audio_event = voice_component(
+                    enabled=False,
+                    busy=False,
+                    language="en-IN",
+                    rate=0.95,
+                    speech_text="",
+                    speech_sequence=0,
+                    speech_kind="reply",
+                    last_transcript="",
+                    voice_error="",
+                    key="smriti_demo_audio_archive_widget",
+                    default=None,
+                )
+                if isinstance(audio_event, dict) and audio_event.get("event") == "audio_archive":
+                    event_id = str(audio_event.get("event_id", ""))
+                    if event_id and event_id != st.session_state.get("demo_audio_archive_event_id"):
+                        st.session_state["demo_audio_archive_event_id"] = event_id
+                        encoded = str(audio_event.get("audio_base64", ""))
+                        if not encoded or len(encoded) > 12_000_000:
+                            st.error("Audio clip is empty or too large.")
+                        else:
+                            raw_audio = base64.b64decode(encoded, validate=True)
+                            mime = str(audio_event.get("mime_type", "audio/webm")).split(";")[0].lower()
+                            ext = "m4a" if mime == "audio/mp4" else ("wav" if mime == "audio/wav" else "webm")
+                            saved_audio = save_media("audio", raw_audio, ext, mime, archive_tags(), {
+                                "maximum_recording_seconds": 30,
+                                "mode": "DEMO MODE",
+                            })
+                            st.success(f"Audio clip saved locally: {saved_audio}")
+            except Exception as audio_exc:
+                st.warning(f"Audio archive controls are unavailable: {type(audio_exc).__name__}: {audio_exc}")
 
     with tab_faces:
         st.markdown("### Local face recognition")
