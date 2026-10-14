@@ -394,7 +394,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
       // Start from zero so a reply queued before the iframe mounted is not lost.
       // The common sequence check below consumes it immediately on this render.
       lastSpeechSequence = 0;
-      setStatus(args.enabled ? "Ready. Press Activate to grant mic access and begin." : "Enable LIVE JARVIS and start the camera first.");
+      setStatus(args.enabled ? "Ready. Press Activate to grant mic access and begin." : "Enable LIVE JARVIS in the app first.");
     }
 
     const sequence = Number(args.speech_sequence || 0);
