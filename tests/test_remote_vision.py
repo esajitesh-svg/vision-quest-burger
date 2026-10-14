@@ -1,6 +1,7 @@
 """Tests for the remote VLM path without calling a real paid/hosted endpoint."""
 from __future__ import annotations
 
+import base64
 from io import BytesIO
 
 from PIL import Image
@@ -9,8 +10,8 @@ import pytest
 import core.cloud_vision as vision
 
 
-def _png_bytes() -> bytes:
-    image = Image.new("RGB", (96, 64), color=(20, 110, 160))
+def _png_bytes(size: tuple[int, int] = (96, 64)) -> bytes:
+    image = Image.new("RGB", size, color=(20, 110, 160))
     buf = BytesIO()
     image.save(buf, format="PNG")
     return buf.getvalue()
@@ -90,3 +91,38 @@ def test_remote_inference_translates_provider_errors(monkeypatch, status_code, m
 
     with pytest.raises(RuntimeError, match=message):
         vision.analyze_image(_png_bytes(), max_side=64)
+
+
+def test_high_detail_live_observation_preserves_image_detail_and_budget(monkeypatch):
+    calls = {}
+
+    def fake_post(url, headers, json, timeout):
+        calls.update(url=url, headers=headers, payload=json, timeout=timeout)
+        return FakeResponse(200, {
+            "choices": [{"message": {"content": "Detailed observation."}}]
+        })
+
+    monkeypatch.setattr(vision, "get_hf_token", lambda: "hf-test-token")
+    monkeypatch.setattr(vision.requests, "post", fake_post)
+
+    result = vision.analyze_image(
+        _png_bytes((1920, 1080)), mode="auto_observe", max_side=1280
+    )
+
+    assert result.original_size == (1920, 1080)
+    assert result.processed_size == (1280, 720)
+    assert calls["payload"]["max_tokens"] == 700
+    content = calls["payload"]["messages"][0]["content"]
+    assert "FINE DETAILS" in content[0]["text"]
+    data_url = content[1]["image_url"]["url"]
+    image_bytes = base64.b64decode(data_url.split(",", 1)[1])
+    with Image.open(BytesIO(image_bytes)) as sent_image:
+        assert sent_image.format == "JPEG"
+        assert sent_image.size == (1280, 720)
+
+
+def test_auto_observe_prompt_prioritizes_specific_evidence():
+    prompt = vision.build_prompt("auto_observe")
+    assert "VISIBLE OBJECTS AND POSITIONS" in prompt
+    assert "READABLE TEXT" in prompt
+    assert "do not guess" in prompt.lower()
