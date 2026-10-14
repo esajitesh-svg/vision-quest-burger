@@ -27,7 +27,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from streamlit_webrtc import VideoHTMLAttributes, WebRtcMode, webrtc_streamer
 
 from core.cloud_db import (init_db, list_people, list_memories, save_person, save_memory, search_memories, search_memories_for_voice, search_activity_for_voice, save_conversation_turn, list_conversation_turns, save_observation, list_observations, save_person_portrait, get_person_portrait, delete_person_portrait, export_memories_csv, export_activity_csv, has_durable_database)
-from core.cloud_vision import MODE_LABELS, analyze_image, model_status, prepare_image
+from core.cloud_vision import MODEL_ID, MODE_LABELS, analyze_image, model_status, prepare_image
 from core.realtime_detector import REALTIME_DETECTOR_LABEL, RealtimeYOLOXDetector
 from core.live_report import build_live_report
 from core.cloud_cv import process_image_opencv
@@ -1883,7 +1883,7 @@ with settings_tab:
     st.subheader("Cloud deployment status")
     ready, status_message = model_status()
     st.write(f"**Vision engine:** {status_message}")
-    st.write("**Model:** HuggingFaceTB/SmolVLM-256M-Instruct")
+    st.write(f"**Vision model:** {MODEL_ID}")
     st.write("**OpenCV:** Headless OpenCV processes each live frame and renders selectable diagnostic views with detection overlays.")
     st.write(f"**Object detector:** {REALTIME_DETECTOR_LABEL}. The ONNX model runs on the app host using OpenCV DNN for each frame delivered by WebRTC; object detection does not call an external inference API.")
     st.write("**Camera:** Browser still capture plus WebRTC live stream. OpenCV processes each incoming frame on the cloud host. The Live camera & recording tab supports periodic AI analysis and download of silent MP4 clips up to 60 seconds/25 MB; WebRTC depends on camera permissions and STUN/TURN network access.")
