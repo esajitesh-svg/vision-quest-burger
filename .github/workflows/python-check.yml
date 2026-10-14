@@ -22,7 +22,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install runtime and test dependencies
-        run: python -m pip install --upgrade pip pytest requests pillow numpy opencv-python-headless==4.14.0.94 "streamlit>=1.51,<2.0" streamlit-webrtc==0.70.1 "psycopg[binary]>=3.2,<4"
+        run: python -m pip install --upgrade pip pytest requests pillow numpy opencv-contrib-python-headless==4.14.0.94 "streamlit>=1.51,<2.0" streamlit-webrtc==0.70.1 "psycopg[binary]>=3.2,<4"
 
       - name: Validate browser voice component JavaScript
         run: |
@@ -36,10 +36,10 @@ jobs:
           node tests/browser_voice_smoke.cjs components/browser_voice/index.html
 
       - name: Compile all Python source
-        run: python -m compileall -q app.py core tests
+        run: python -m compileall -q app.py simple_app.py core tests
 
       - name: Check runtime imports
-        run: python -c "import streamlit, streamlit_webrtc, av, cv2; from streamlit_webrtc import VideoHTMLAttributes; import core.cloud_db, core.cloud_vision, core.cloud_detection, core.realtime_detector, core.live_report, core.cloud_cv, core.cloud_live, core.voice, core.cloud_voice, core.live_voice; print('runtime imports passed')"
+        run: python -c "import streamlit, streamlit_webrtc, av, cv2; from streamlit_webrtc import VideoHTMLAttributes; import core.cloud_db, core.cloud_vision, core.cloud_detection, core.realtime_detector, core.live_report, core.cloud_cv, core.cloud_live, core.voice, core.cloud_voice, core.live_voice, core.demo_mode, core.face_recognition; print('runtime imports passed')"
 
       - name: Test live OpenCV processing, recording, and vision modes
         run: python -m pytest -q tests
