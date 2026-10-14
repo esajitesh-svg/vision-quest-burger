@@ -27,6 +27,7 @@ def test_live_frame_processing_resizes_and_returns_jpeg():
     assert metrics["height"] == frame.shape[0]
     assert "brightness" in metrics
     assert "sharpness" in metrics
+    assert metrics["jpeg_quality"] == 94
 
 
 @pytest.mark.parametrize(
