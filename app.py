@@ -448,57 +448,72 @@ with vision_tab:
         def on_live_video_frame(frame):
             try:
                 frame_bgr = frame.to_ndarray(format="bgr24")
-                if live_opencv_always:
-                    # Keep a color frame for AI; render a separate diagnostic frame for the browser.
-                    processed_bgr, analysis_jpeg, metrics = process_live_frame(
-                        frame_bgr, max_side=640, enhance=live_enhance
-                    )
-                    display_bgr = render_cv_view(
-                        processed_bgr,
-                        mode=live_view_mode,
-                        canny_low=canny_low,
-                        canny_high=canny_high,
-                        frame_count=live_state.frame_count + 1,
-                    )
-                    detection_overlay = live_state.detection_snapshot()
-                    if (
-                        detection_overlay["detections"]
-                        and detection_overlay["age_seconds"] is not None
-                        and detection_overlay["age_seconds"] <= 9.0
-                    ):
-                        display_bgr = draw_detection_overlay(
-                            display_bgr,
-                            detection_overlay["detections"],
-                            age_seconds=detection_overlay["age_seconds"],
+                # The detector receives the same current frame shown to the user.
+                # It runs locally for each frame delivered by WebRTC; no old API box
+                # result is copied onto a newer frame.
+                processed_bgr, analysis_jpeg, metrics = process_live_frame(
+                    frame_bgr, max_side=640, enhance=live_enhance
+                )
+                detections = []
+                detector_result = None
+                if live_object_detection and realtime_detector is not None:
+                    try:
+                        detector_result = realtime_detector.detect(
+                            processed_bgr,
+                            confidence_threshold=detection_threshold,
+                            max_detections=30,
                         )
-                    ok, display_encoded = cv2.imencode(
-                        ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 82]
-                    )
-                    display_jpeg = display_encoded.tobytes() if ok else analysis_jpeg
+                        detections = detector_result.detections
+                        metrics["detector_fps"] = detector_result.fps
+                        metrics["detector_ms"] = round(detector_result.elapsed_seconds * 1000.0, 1)
+                        live_state.finish_detection(
+                            detections=detections,
+                            model=REALTIME_DETECTOR_LABEL,
+                            elapsed_seconds=detector_result.elapsed_seconds,
+                        )
+                    except Exception as exc:
+                        metrics["detector_fps"] = 0.0
+                        metrics["detector_ms"] = None
+                        live_state.finish_detection(error=f"{type(exc).__name__}: {exc}")
                 else:
-                    # Troubleshooting fallback: preserve an unmodified camera frame.
-                    height, width = frame_bgr.shape[:2]
-                    fallback_buffer = io.BytesIO()
-                    Image.fromarray(frame_bgr[:, :, ::-1]).save(
-                        fallback_buffer, format="JPEG", quality=82
+                    metrics["detector_fps"] = 0.0
+                    metrics["detector_ms"] = None
+
+                display_bgr = render_cv_view(
+                    processed_bgr,
+                    mode=live_view_mode,
+                    canny_low=canny_low,
+                    canny_high=canny_high,
+                    frame_count=live_state.frame_count + 1,
+                )
+                if detections:
+                    # Boxes are computed for this exact frame, so there is no stale overlay.
+                    display_bgr = draw_detection_overlay(display_bgr, detections, age_seconds=0.0)
+
+                if live_object_detection and detector_result is not None:
+                    telemetry = (
+                        f"YOLOX LIVE  {detector_result.fps:.1f} FPS  |  "
+                        f"{detector_result.elapsed_seconds * 1000.0:.0f} ms"
                     )
-                    analysis_jpeg = fallback_buffer.getvalue()
-                    display_jpeg = analysis_jpeg
-                    display_bgr = frame_bgr
-                    metrics = {
-                        "width": width, "height": height,
-                        "brightness": None, "sharpness": None,
-                        "brightness_label": "OpenCV off",
-                        "sharpness_label": "OpenCV off",
-                        "jpeg_bytes": len(display_jpeg),
-                    }
-                # Keep compatibility with the existing session-state API: the WebRTC
-                # return value renders the diagnostic view, while the cached JPEG remains
-                # the color frame used for AI sampling. Recording receives display_bgr.
-                live_state.update_frame(display_bgr, analysis_jpeg, metrics)
+                    cv2.putText(
+                        display_bgr, telemetry,
+                        (max(10, display_bgr.shape[1] - 300), 21),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (100, 255, 180), 1, cv2.LINE_AA,
+                    )
+
+                ok, display_encoded = cv2.imencode(
+                    ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 82]
+                )
+                display_jpeg = display_encoded.tobytes() if ok else analysis_jpeg
+                # The live view and recording use the annotated frame; scene-analysis
+                # samples retain the clean color image without boxes or diagnostic text.
+                live_state.update_frame(
+                    display_bgr, display_jpeg, metrics, analysis_jpeg=analysis_jpeg
+                )
                 return av.VideoFrame.from_ndarray(display_bgr, format="bgr24")
             except Exception as exc:
-                live_state.finish_analysis(error=f"OpenCV frame processing error: {type(exc).__name__}: {exc}")
+                live_state.finish_detection(error=f"OpenCV live detection error: {type(exc).__name__}: {exc}")
+                live_state.finish_analysis(error=f"Live frame processing error: {type(exc).__name__}: {exc}")
                 return frame
 
         try:
@@ -517,6 +532,18 @@ with vision_tab:
                 },
                 async_processing=True,
                 on_video_ended=live_state.close,
+                video_html_attrs=VideoHTMLAttributes(
+                    autoPlay=True,
+                    controls=True,
+                    muted=True,
+                    style={
+                        "width": "100%",
+                        "height": "calc(100vh - 320px)",
+                        "minHeight": "360px",
+                        "objectFit": "contain",
+                        "backgroundColor": "#000000",
+                    },
+                ),
             )
         except Exception as exc:
             live_ctx = None
@@ -537,17 +564,8 @@ with vision_tab:
                     key="manual_live_analyze",
                 )
 
-                # Launch remote inference in daemon threads. The WebRTC callback and
-                # this 1-second fragment remain free to refresh the live CV workspace.
-                if is_playing and live_object_detection:
-                    detection_sample = live_state.take_detection_sample(live_detection_interval)
-                    if detection_sample is not None:
-                        Thread(
-                            target=run_live_detection_worker,
-                            args=(live_state, detection_sample, get_secret("HF_TOKEN"), detection_threshold),
-                            daemon=True,
-                        ).start()
-
+                # The local detector runs inside the video callback on every delivered frame.
+                # Only natural-language scene explanation uses an asynchronous remote request.
                 if manual_analyze:
                     sample = live_state.take_analysis_sample(live_interval, force=True)
                     if sample is None:
