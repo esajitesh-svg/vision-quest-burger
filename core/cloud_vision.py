@@ -22,6 +22,7 @@ MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 REQUEST_TIMEOUT = (10, 90)
 
 MODES: dict[str, str] = {
+    "auto_observe": "Perform an automatic visual scan. In concise bullet points report: (1) overall scene and setting, (2) clearly visible everyday objects and their approximate positions (left/center/right and foreground/background), (3) visible actions or activities without guessing a person's identity or intention, and (4) readable text if any. Prioritize useful details and uncertainty. Do not claim to detect everything; mention only evidence actually visible in this frame.",
     "scene": "Describe the visible scene in 2–4 concise sentences. Mention only clearly visible objects, actions, and setting.",
     "objects": "List clearly visible objects and say where each appears in the frame (left, center, right, foreground, or background). Do not invent unseen objects.",
     "read_text": "Transcribe only text that is visibly readable in the image. Preserve wording. Mark uncertain text as [unclear]. Do not invent missing words.",
@@ -29,6 +30,7 @@ MODES: dict[str, str] = {
     "visual_question": "Answer the user's question using only evidence from the image. If it cannot be determined, say so clearly.",
 }
 MODE_LABELS = {
+    "auto_observe": "Auto-observe: scene + objects + activities",
     "scene": "Scene overview",
     "objects": "Find and locate objects",
     "read_text": "Read visible text",
