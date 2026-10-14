@@ -52,4 +52,5 @@ def test_auto_observe_prompt_covers_scene_objects_actions_and_text():
     assert "visible actions or activities" in prompt
     assert "readable text" in prompt
     assert "Do not claim to detect everything" in prompt
-\n
+
+
