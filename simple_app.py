@@ -91,6 +91,98 @@ if "smriti_db_init_attempted" not in st.session_state:
   st.session_state.smriti_db_init_error = f"{type(db_exc).__name__}: {db_exc}"
  st.session_state.smriti_db_init_attempted = True
 
+@st.fragment(run_every=1)
+def render_live_analyser():
+ with st.expander("04 / LIVE OPENCV ANALYSER + OBJECT DETECTOR", expanded=True):
+  st.caption("This panel refreshes from the newest camera frame about once per second. OpenCV display processing is local; optional YOLOX labels run locally on the CPU.")
+  cv_mode = st.selectbox(
+   "OpenCV display operator",
+   ["COLOR + HUD","GRAYSCALE","CANNY EDGE MAP","CONTOUR MAP","ADAPTIVE THRESHOLD","HSV SATURATION"],
+   key="smriti_cv_mode",
+  )
+  ca, cb = st.columns(2)
+  with ca:
+   canny_low = st.slider("Canny lower threshold",0,200,55,5,key="smriti_canny_low")
+  with cb:
+   canny_high = st.slider("Canny upper threshold",20,255,140,5,key="smriti_canny_high")
+  enhance_cv = st.checkbox("Enhance local contrast before display",value=False,key="smriti_cv_enhance")
+  detect_objects = st.checkbox("Enable live object detection (OpenCV DNN / YOLOX)",value=False,key="smriti_cv_detect_objects")
+  confidence_pct = st.slider("Minimum object confidence",15,80,35,5,key="smriti_cv_confidence")
+  now = time.monotonic()
+  with st.session_state.cam_state.lock:
+   cv_frame = st.session_state.cam_state.frame.copy() if st.session_state.cam_state.frame is not None else None
+   frame_age = now - st.session_state.cam_state.updated_at if st.session_state.cam_state.updated_at else 9999.0
+
+  if cv_frame is None or frame_age > 5.0:
+   st.info("Waiting for a fresh camera frame. Start the camera and keep the live feed running.")
+  else:
+   try:
+    processed, _, metrics = process_live_frame(
+     cv_frame,max_side=960,enhance=enhance_cv,encode_jpeg=False,compute_metrics=True
+    )
+    st.session_state.opencv_frame_counter += 1
+    display = render_cv_view(
+     processed,mode=cv_mode,canny_low=canny_low,canny_high=canny_high,
+     frame_count=st.session_state.opencv_frame_counter,
+    )
+    if detect_objects and not st.session_state.opencv_detection_error:
+     run_detector = (
+      st.session_state.opencv_detection_last_run <= 0.0
+      or now - st.session_state.opencv_detection_last_run >= 2.5
+     )
+     if run_detector:
+      try:
+       with st.spinner("Loading/running local YOLOX detector… first run downloads the model"):
+        detector = get_local_object_detector()
+        result = detector.detect(
+         processed,confidence_threshold=confidence_pct/100.0,max_detections=30
+        )
+       st.session_state.opencv_detections = result.detections
+       st.session_state.opencv_detection_last_run = time.monotonic()
+       st.session_state.opencv_detection_elapsed = result.elapsed_seconds
+      except Exception as detector_exc:
+       st.session_state.opencv_detection_error = f"{type(detector_exc).__name__}: {detector_exc}"
+    elif not detect_objects:
+     st.session_state.opencv_detections = []
+     st.session_state.opencv_detection_error = ""
+     st.session_state.opencv_detection_last_run = 0.0
+
+    detection_age = (
+     time.monotonic() - st.session_state.opencv_detection_last_run
+     if st.session_state.opencv_detection_last_run > 0.0 else 9999.0
+    )
+    active_detections = (
+     st.session_state.opencv_detections if detect_objects and detection_age <= 3.5 else []
+    )
+    if active_detections:
+     display = draw_detection_overlay(display,active_detections,age_seconds=detection_age,max_age_seconds=3.5)
+    st.session_state.opencv_result_rgb = cv2.cvtColor(display,cv2.COLOR_BGR2RGB)
+    st.session_state.opencv_metrics = metrics
+    st.image(st.session_state.opencv_result_rgb,caption="LIVE OpenCV output · refreshed from current camera frame",use_container_width=True)
+    metrics_cols = st.columns(4)
+    metrics_cols[0].metric("Frame size",f"{metrics.get('width','—')} × {metrics.get('height','—')}")
+    metrics_cols[1].metric("Brightness",str(metrics.get("brightness","—")))
+    metrics_cols[2].metric("Sharpness",str(metrics.get("sharpness","—")))
+    metrics_cols[3].metric("Objects",str(len(active_detections)) if detect_objects else "Off")
+    if metrics.get("brightness_label"):
+     st.caption(f"Lighting: {metrics['brightness_label']} · Focus estimate: {metrics.get('sharpness_label','unavailable')} · frame age {frame_age:.1f}s")
+    if detect_objects:
+     if st.session_state.opencv_detection_error:
+      st.error("Live object detector unavailable: " + st.session_state.opencv_detection_error)
+      st.caption("Uncheck and recheck object detection to retry after correcting the issue.")
+     else:
+      st.caption(f"Detector: {REALTIME_DETECTOR_LABEL} · last inference {st.session_state.opencv_detection_elapsed*1000:.0f} ms · detections refresh about every 2.5 seconds")
+      if active_detections:
+       st.write("**Current object labels**")
+       for item in active_detections:
+        st.write(f"• {item['label']} — {item['score']:.0%} confidence")
+      elif st.session_state.opencv_detection_last_run > 0:
+       st.caption("No supported objects exceeded the selected confidence threshold in the latest scan.")
+   except Exception as cv_exc:
+    st.error(f"Live OpenCV analyser failed: {type(cv_exc).__name__}: {cv_exc}")
+
+render_live_analyser()
+
 l,r=st.columns([.8,1.5],gap="large")
 with l:
  st.markdown('<div class="panel"><div class="kicker">01 / COMPANION CORE</div><div class="orbwrap"><div class="orb"></div></div><div class="status">✦ SMRITI ONLINE</div><p style="text-align:center;color:#8aa6b5;font-size:13px">Ask a question. Get an AI answer and play it aloud.</p></div>',unsafe_allow_html=True)
@@ -131,96 +223,6 @@ with r:
   st.info("Click START in the camera controls and allow camera access in Chrome/Edge. For local use, open http://localhost:8501 rather than a LAN IP or plain HTTP remote link.")
  st.caption("Camera frames are kept in local app memory. OpenCV processing, optional object detection, and scene observation are available below.")
  st.markdown('</div>',unsafe_allow_html=True)
-
- @st.fragment(run_every=1)
- def render_live_analyser():
-  with st.expander("04 / LIVE OPENCV ANALYSER + OBJECT DETECTOR", expanded=True):
-   st.caption("This panel refreshes from the newest camera frame about once per second. OpenCV display processing is local; optional YOLOX labels run locally on the CPU.")
-   cv_mode = st.selectbox(
-    "OpenCV display operator",
-    ["COLOR + HUD","GRAYSCALE","CANNY EDGE MAP","CONTOUR MAP","ADAPTIVE THRESHOLD","HSV SATURATION"],
-    key="smriti_cv_mode",
-   )
-   ca, cb = st.columns(2)
-   with ca:
-    canny_low = st.slider("Canny lower threshold",0,200,55,5,key="smriti_canny_low")
-   with cb:
-    canny_high = st.slider("Canny upper threshold",20,255,140,5,key="smriti_canny_high")
-   enhance_cv = st.checkbox("Enhance local contrast before display",value=False,key="smriti_cv_enhance")
-   detect_objects = st.checkbox("Enable live object detection (OpenCV DNN / YOLOX)",value=False,key="smriti_cv_detect_objects")
-   confidence_pct = st.slider("Minimum object confidence",15,80,35,5,key="smriti_cv_confidence")
-   now = time.monotonic()
-   with st.session_state.cam_state.lock:
-    cv_frame = st.session_state.cam_state.frame.copy() if st.session_state.cam_state.frame is not None else None
-    frame_age = now - st.session_state.cam_state.updated_at if st.session_state.cam_state.updated_at else 9999.0
-
-   if cv_frame is None or frame_age > 5.0:
-    st.info("Waiting for a fresh camera frame. Start the camera and keep the live feed running.")
-   else:
-    try:
-     processed, _, metrics = process_live_frame(
-      cv_frame,max_side=960,enhance=enhance_cv,encode_jpeg=False,compute_metrics=True
-     )
-     st.session_state.opencv_frame_counter += 1
-     display = render_cv_view(
-      processed,mode=cv_mode,canny_low=canny_low,canny_high=canny_high,
-      frame_count=st.session_state.opencv_frame_counter,
-     )
-     if detect_objects and not st.session_state.opencv_detection_error:
-      run_detector = (
-       st.session_state.opencv_detection_last_run <= 0.0
-       or now - st.session_state.opencv_detection_last_run >= 2.5
-      )
-      if run_detector:
-       try:
-        with st.spinner("Loading/running local YOLOX detector… first run downloads the model"):
-         detector = get_local_object_detector()
-         result = detector.detect(
-          processed,confidence_threshold=confidence_pct/100.0,max_detections=30
-         )
-        st.session_state.opencv_detections = result.detections
-        st.session_state.opencv_detection_last_run = time.monotonic()
-        st.session_state.opencv_detection_elapsed = result.elapsed_seconds
-       except Exception as detector_exc:
-        st.session_state.opencv_detection_error = f"{type(detector_exc).__name__}: {detector_exc}"
-     elif not detect_objects:
-      st.session_state.opencv_detections = []
-      st.session_state.opencv_detection_error = ""
-      st.session_state.opencv_detection_last_run = 0.0
-
-     detection_age = (
-      time.monotonic() - st.session_state.opencv_detection_last_run
-      if st.session_state.opencv_detection_last_run > 0.0 else 9999.0
-     )
-     active_detections = (
-      st.session_state.opencv_detections if detect_objects and detection_age <= 3.5 else []
-     )
-     if active_detections:
-      display = draw_detection_overlay(display,active_detections,age_seconds=detection_age,max_age_seconds=3.5)
-     st.session_state.opencv_result_rgb = cv2.cvtColor(display,cv2.COLOR_BGR2RGB)
-     st.session_state.opencv_metrics = metrics
-     st.image(st.session_state.opencv_result_rgb,caption="LIVE OpenCV output · refreshed from current camera frame",use_container_width=True)
-     metrics_cols = st.columns(4)
-     metrics_cols[0].metric("Frame size",f"{metrics.get('width','—')} × {metrics.get('height','—')}")
-     metrics_cols[1].metric("Brightness",str(metrics.get("brightness","—")))
-     metrics_cols[2].metric("Sharpness",str(metrics.get("sharpness","—")))
-     metrics_cols[3].metric("Objects",str(len(active_detections)) if detect_objects else "Off")
-     if metrics.get("brightness_label"):
-      st.caption(f"Lighting: {metrics['brightness_label']} · Focus estimate: {metrics.get('sharpness_label','unavailable')} · frame age {frame_age:.1f}s")
-     if detect_objects:
-      if st.session_state.opencv_detection_error:
-       st.error("Live object detector unavailable: " + st.session_state.opencv_detection_error)
-       st.caption("Uncheck and recheck object detection to retry after correcting the issue.")
-      else:
-       st.caption(f"Detector: {REALTIME_DETECTOR_LABEL} · last inference {st.session_state.opencv_detection_elapsed*1000:.0f} ms · detections refresh about every 2.5 seconds")
-       if active_detections:
-        st.write("**Current object labels**")
-        for item in active_detections:
-         st.write(f"• {item['label']} — {item['score']:.0%} confidence")
-       elif st.session_state.opencv_detection_last_run > 0:
-        st.caption("No supported objects exceeded the selected confidence threshold in the latest scan.")
-    except Exception as cv_exc:
-     st.error(f"Live OpenCV analyser failed: {type(cv_exc).__name__}: {cv_exc}")
 
  render_live_analyser()
 
