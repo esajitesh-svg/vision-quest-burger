@@ -968,7 +968,7 @@ with vision_tab:
                         assistant_processing=bool(voice_snapshot["processing"]),
                         last_spoken_at=float(st.session_state.get("live_jarvis_last_spoken_at", 0.0)),
                         now=time.monotonic(),
-                        cooldown_seconds=2.0,
+                        cooldown_seconds=8.0,
                     )
                 ):
                     narration_text = str(latest_observation.get("text", "")).strip()
@@ -994,6 +994,7 @@ with vision_tab:
                         rate=float(st.session_state.get("voice_rate", 0.92)),
                         speech_text=st.session_state.get("live_jarvis_browser_speech_text", ""),
                         speech_sequence=int(st.session_state.get("live_jarvis_browser_speech_sequence", 0)),
+                        speech_kind=st.session_state.get("live_jarvis_browser_speech_kind", "reply"),
                         last_transcript=voice_snapshot.get("latest_transcript", ""),
                         voice_error=voice_snapshot.get("error", ""),
                         key="smriti_live_browser_voice",
