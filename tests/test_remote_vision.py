@@ -126,3 +126,32 @@ def test_auto_observe_prompt_prioritizes_specific_evidence():
     assert "VISIBLE OBJECTS AND POSITIONS" in prompt
     assert "READABLE TEXT" in prompt
     assert "do not guess" in prompt.lower()
+
+
+
+def test_live_companion_prompt_covers_multiple_objects_and_uncertainty():
+    prompt = vision.build_prompt("live_companion", "Previous scene note: a book was on the table.")
+
+    assert "2–4 short" in prompt
+    assert "more than one distinct object" in prompt
+    assert "never claim to see everything" in prompt
+    assert "do not identify people" in prompt.lower()
+    assert "Previous scene note" in prompt
+
+
+def test_live_companion_response_uses_a_short_token_budget(monkeypatch):
+    calls = {}
+
+    def fake_post(url, headers, json, timeout):
+        calls.update(url=url, headers=headers, payload=json, timeout=timeout)
+        return FakeResponse(200, {
+            "choices": [{"message": {"content": "A table is in front of the camera."}}]
+        })
+
+    monkeypatch.setattr(vision, "get_hf_token", lambda: "hf-test-token")
+    monkeypatch.setattr(vision.requests, "post", fake_post)
+
+    result = vision.analyze_image(_png_bytes(), mode="live_companion", max_side=64)
+
+    assert result.text == "A table is in front of the camera."
+    assert calls["payload"]["max_tokens"] == 150
