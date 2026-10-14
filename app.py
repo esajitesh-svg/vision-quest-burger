@@ -26,7 +26,7 @@ import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
 from streamlit_webrtc import VideoHTMLAttributes, WebRtcMode, webrtc_streamer
 
-from core.cloud_db import init_db, list_people, list_memories, save_person, save_memory, search_memories, search_memories_for_voice, export_memories_csv
+from core.cloud_db import (init_db, list_people, list_memories, save_person, save_memory, search_memories, search_memories_for_voice, search_activity_for_voice, save_conversation_turn, list_conversation_turns, save_observation, list_observations, save_person_portrait, get_person_portrait, export_memories_csv, export_activity_csv, has_durable_database)
 from core.cloud_vision import MODE_LABELS, analyze_image, model_status, prepare_image
 from core.realtime_detector import REALTIME_DETECTOR_LABEL, RealtimeYOLOXDetector
 from core.live_report import build_live_report
@@ -173,63 +173,96 @@ def run_live_vision_worker(live_state, sample_bytes: bytes, mode: str, question:
         live_state.finish_analysis(error=f"{type(exc).__name__}: {exc}")
 
 
-def run_live_voice_worker(voice_state, live_state, pcm_clip: bytes) -> None:
-    """Transcribe one detected pause and answer using the newest available camera frame."""
-    try:
-        wav_clip = pcm16_to_wav(pcm_clip)
-        transcript = transcribe_audio(wav_clip, content_type="audio/wav")
-        _, _, frame_count, last_frame_time = live_state.snapshot()
-        image_bytes = None
-        frame_is_recent = (
-            frame_count > 0
-            and last_frame_time > 0
-            and (time.monotonic() - last_frame_time) <= 4.0
-        )
-        if frame_is_recent:
-            image_bytes = live_state.get_latest_analysis_jpeg(max_side=512)
+def answer_live_transcript(voice_state, live_state, transcript: str) -> None:
+    """Answer a final transcript quickly using the newest frame and durable memories."""
+    transcript = (transcript or "").strip()
+    if not transcript:
+        raise ValueError("The recognized speech was empty.")
 
-        live_status = live_state.get_status()
-        # Pair the fresh camera frame with recent local detections and the latest
-        # natural-language observation. This lets voice answers ground themselves
-        # in both the visible frame and the actual detector output, not memory alone.
-        voice_observation = dict(live_status.get("latest_observation") or {})
-        detection_status = live_state.detection_snapshot()
-        detection_age = detection_status.get("age_seconds")
-        detections_are_recent = (
-            isinstance(detection_age, (int, float)) and detection_age <= 5.0
-        )
-        if detections_are_recent:
-            compact_detections = []
-            for item in detection_status.get("detections", [])[:12]:
-                try:
-                    label = str(item.get("label", "")).strip()[:48]
-                    score = max(0.0, min(1.0, float(item.get("score", 0.0))))
-                except (TypeError, ValueError):
-                    continue
-                if label:
-                    compact_detections.append({
-                        "label": label,
-                        "confidence": round(score, 2),
-                    })
-            voice_observation["object_detections"] = compact_detections
-            voice_observation["object_detection_age_seconds"] = round(float(detection_age), 1)
-            voice_observation["object_detection_model"] = str(detection_status.get("model", ""))[:100]
-            voice_observation.setdefault("mode", "live_camera")
-        # Give the assistant the notes most relevant to this utterance rather than
-        # the ten newest notes, which may belong to a completely different topic.
-        relevant_memories = search_memories_for_voice(transcript, limit=10)
-        reply = answer_voice_query(
-            transcript,
-            latest_observation=voice_observation or None,
-            memories=relevant_memories,
-            conversation_history=voice_state.history_snapshot(),
-            live_image_bytes=image_bytes,
-        )
-        voice_state.finish_turn(
+    _, _, frame_count, last_frame_time = live_state.snapshot()
+    frame_is_recent = (
+        frame_count > 0
+        and last_frame_time > 0
+        and (time.monotonic() - last_frame_time) <= 5.0
+    )
+    image_bytes = live_state.get_latest_analysis_jpeg(max_side=448) if frame_is_recent else None
+
+    live_status = live_state.get_status()
+    voice_observation = dict(live_status.get("latest_observation") or {})
+    detection_status = live_state.detection_snapshot()
+    detection_age = detection_status.get("age_seconds")
+    detections_are_recent = isinstance(detection_age, (int, float)) and detection_age <= 5.0
+    if detections_are_recent:
+        compact_detections = []
+        for item in detection_status.get("detections", [])[:12]:
+            try:
+                label = str(item.get("label", "")).strip()[:48]
+                score = max(0.0, min(1.0, float(item.get("score", 0.0))))
+            except (TypeError, ValueError):
+                continue
+            if label:
+                compact_detections.append({"label": label, "confidence": round(score, 2)})
+        voice_observation["object_detections"] = compact_detections
+        voice_observation["object_detection_age_seconds"] = round(float(detection_age), 1)
+        voice_observation["object_detection_model"] = str(detection_status.get("model", ""))[:100]
+        voice_observation.setdefault("mode", "live_camera")
+
+    try:
+        relevant_memories = search_activity_for_voice(transcript, limit=10)
+    except Exception:
+        # Storage outages should not prevent a live answer from being generated.
+        relevant_memories = search_memories_for_voice(transcript, limit=8)
+
+    history = voice_state.history_snapshot()
+    if not history:
+        try:
+            history = [
+                {"question": str(row.get("user_text", "")), "reply": str(row.get("assistant_text", ""))}
+                for row in reversed(list_conversation_turns(limit=4))
+            ]
+        except Exception:
+            history = []
+
+    reply = answer_voice_query(
+        transcript,
+        latest_observation=voice_observation or None,
+        memories=relevant_memories,
+        conversation_history=history,
+        live_image_bytes=image_bytes,
+    )
+
+    voice_state.finish_turn(
+        transcript,
+        reply,
+        used_live_camera=image_bytes is not None,
+    )
+    try:
+        save_conversation_turn(
             transcript,
             reply,
+            source="Live JARVIS",
             used_live_camera=image_bytes is not None,
         )
+    except Exception as exc:
+        voice_state.set_warning(
+            "Reply generated, but the long-term conversation log could not be saved: "
+            + f"{type(exc).__name__}: {exc}"
+        )
+
+
+def run_live_voice_text_worker(voice_state, live_state, transcript: str) -> None:
+    """Run model inference off the Streamlit UI thread for browser-recognized speech."""
+    try:
+        answer_live_transcript(voice_state, live_state, transcript)
+    except Exception as exc:
+        voice_state.fail_turn(f"{type(exc).__name__}: {exc}")
+
+
+def run_live_voice_worker(voice_state, live_state, pcm_clip: bytes) -> None:
+    """Fallback path for an already captured audio clip."""
+    try:
+        transcript = transcribe_audio(pcm16_to_wav(pcm_clip), content_type="audio/wav")
+        answer_live_transcript(voice_state, live_state, transcript)
     except Exception as exc:
         voice_state.fail_turn(f"{type(exc).__name__}: {exc}")
 
@@ -239,6 +272,11 @@ st.set_page_config(
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="collapsed",
+)
+
+browser_voice_component = st.components.v1.declare_component(
+    "smriti_browser_voice",
+    path=str(ROOT / "components" / "browser_voice"),
 )
 
 
