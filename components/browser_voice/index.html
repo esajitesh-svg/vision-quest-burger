@@ -58,6 +58,8 @@ button:disabled{opacity:.38;cursor:not-allowed}
   let lastSpeechSequence = 0;
   let lastResultIndex = 0;
   let startTimer = null;
+  let speechStartWatchdog = null;
+  let currentSpeechStarted = false;
   let lastSpokenText = "";
   let lastSpokenKind = "reply";
 
@@ -211,10 +213,19 @@ button:disabled{opacity:.38;cursor:not-allowed}
     const generation = ++speechGeneration;
     speaking = true;
     currentSpeechKind = requestedKind;
+    currentSpeechStarted = false;
+    clearTimeout(speechStartWatchdog);
     if (recognition && recognitionRunning) {
       try { recognition.stop(); } catch (_) {}
     }
-    speech.cancel();
+    // Some Chromium builds leave speechSynthesis paused after cancel(). Explicitly
+    // resume it before queueing the next utterance.
+    try {
+      speech.cancel();
+      speech.resume();
+    } catch (error) {
+      setStatus("Could not reset browser speech: " + String(error && error.message || error));
+    }
     const utterance = new SpeechSynthesisUtterance(String(text));
     const lang = args.language || "en-IN";
     utterance.lang = lang;
@@ -226,12 +237,16 @@ button:disabled{opacity:.38;cursor:not-allowed}
     if (exact || sameLanguage) utterance.voice = exact || sameLanguage;
     utterance.onstart = () => {
       if (generation !== speechGeneration) return;
+      currentSpeechStarted = true;
+      clearTimeout(speechStartWatchdog);
       setStatus("Smriti is speaking. Listening resumes afterwards.", true);
     };
     utterance.onend = () => {
       if (generation !== speechGeneration) return;
+      clearTimeout(speechStartWatchdog);
       speaking = false;
       currentSpeechKind = "";
+      currentSpeechStarted = false;
       awaitingReply = false;
       if (desiredListening && args.enabled) {
         setStatus("Reply finished — listening again.", true);
@@ -242,20 +257,36 @@ button:disabled{opacity:.38;cursor:not-allowed}
         setStatus("Reply finished.");
       }
     };
-    utterance.onerror = () => {
+    utterance.onerror = event => {
       if (generation !== speechGeneration) return;
+      clearTimeout(speechStartWatchdog);
       speaking = false;
       currentSpeechKind = "";
-      setStatus("Voice playback failed. Check device volume or browser speech voices.");
+      currentSpeechStarted = false;
       awaitingReply = false;
+      const reason = String(event && event.error || "unknown");
+      setStatus("Speech playback failed (" + reason + "). Click REPLAY LAST to retry.");
       if (desiredListening) scheduleRestart(250);
     };
-    try { speech.speak(utterance); }
-    catch (_) {
+    speechStartWatchdog = setTimeout(() => {
+      if (generation !== speechGeneration || currentSpeechStarted || !speaking) return;
+      speaking = false;
+      currentSpeechKind = "";
+      awaitingReply = false;
+      setStatus("The browser did not start automatic speech. Click REPLAY LAST to speak the saved reply.");
+      if (desiredListening) scheduleRestart(250);
+    }, 1800);
+    try {
+      speech.speak(utterance);
+      // Older browsers can be left paused even after resume() called above.
+      if (speech.paused) speech.resume();
+    } catch (error) {
+      clearTimeout(speechStartWatchdog);
       if (generation !== speechGeneration) return;
       speaking = false;
       currentSpeechKind = "";
-      setStatus("Could not play speech. Try another browser voice.");
+      currentSpeechStarted = false;
+      setStatus("Could not play speech: " + String(error && error.message || error) + ". Click REPLAY LAST.");
     }
   }
 
@@ -270,7 +301,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
       return;
     }
     try {
-      speech.cancel();
+      try { speech.cancel(); speech.resume(); } catch (_) {}
       const test = new SpeechSynthesisUtterance("Smriti voice test. If you can hear this, speaker output is working.");
       test.lang = args.language || "en-IN";
       test.rate = Math.max(0.65, Math.min(1.25, Number(args.rate || 0.92)));
@@ -320,26 +351,29 @@ button:disabled{opacity:.38;cursor:not-allowed}
     previouslyBusy = Boolean(args.busy);
     if (!initialized) {
       initialized = true;
-      lastSpeechSequence = Number(args.speech_sequence || 0);
+      // Start from zero so a reply queued before the iframe mounted is not lost.
+      // The common sequence check below consumes it immediately on this render.
+      lastSpeechSequence = 0;
       setStatus(args.enabled ? "Ready. Press Activate to grant mic access and begin." : "Enable LIVE JARVIS and start the camera first.");
-    } else {
-      const sequence = Number(args.speech_sequence || 0);
-      if (sequence > lastSpeechSequence && args.speech_text) {
-        lastSpeechSequence = sequence;
-        speakUpdate(args.speech_text, sequence, args.speech_kind || "reply");
-      }
-      // Recover listening if the model errors out before producing a reply.
-      if (awaitingReply && !args.busy && (wasBusy || args.voice_error)) {
-        awaitingReply = false;
-        setStatus(args.voice_error ? "Reply failed — listening again. Check the notice in the app." : "Ready for your next question.", true);
-      }
-      if (args.enabled && !desiredListening && !speaking && !userStopped) {
-        setStatus("Ready. Press Activate to begin listening.");
-      }
-      if (userStopped) setStatus("Voice link stopped.");
-      if (desiredListening && args.enabled && !args.busy && !speaking && !awaitingReply && !recognitionRunning) {
-        scheduleRestart(250);
-      }
+    }
+
+    const sequence = Number(args.speech_sequence || 0);
+    if (sequence > lastSpeechSequence && args.speech_text) {
+      lastSpeechSequence = sequence;
+      speakUpdate(args.speech_text, sequence, args.speech_kind || "reply");
+    }
+
+    // Recover listening if the model errors out before producing a reply.
+    if (awaitingReply && !args.busy && (wasBusy || args.voice_error)) {
+      awaitingReply = false;
+      setStatus(args.voice_error ? "Reply failed — listening again. Check the notice in the app." : "Ready for your next question.", true);
+    }
+    if (args.enabled && !desiredListening && !speaking && !userStopped) {
+      setStatus("Ready. Press Activate to begin listening.");
+    }
+    if (userStopped) setStatus("Voice link stopped.");
+    if (desiredListening && args.enabled && !args.busy && !speaking && !awaitingReply && !recognitionRunning) {
+      scheduleRestart(250);
     }
     if (args.last_transcript) heardNode.textContent = "Last heard: " + String(args.last_transcript).slice(0, 300);
     if (!speech || typeof window.SpeechSynthesisUtterance === "undefined") {
