@@ -131,6 +131,12 @@ def build_live_report(
         if isinstance(sharpness, (int, float)):
             label = str(metrics.get("sharpness_label", "rough estimate"))
             lines.append(f"Focus / edge-detail score: {sharpness:.1f} ({label}).")
+        detector_ms = metrics.get("detector_ms")
+        detector_fps = metrics.get("detector_fps")
+        if isinstance(detector_ms, (int, float)):
+            lines.append(f"Local object-detection inference: {detector_ms:.0f} ms for the current frame.")
+        if isinstance(detector_fps, (int, float)) and detector_fps > 0:
+            lines.append(f"Measured local detector throughput: {detector_fps:.1f} frames per second (host CPU estimate).")
     if frame_count:
         lines.append(f"Camera frames received in this session: {int(frame_count):,}.")
 
