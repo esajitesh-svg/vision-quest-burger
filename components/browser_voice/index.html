@@ -12,7 +12,7 @@ body{margin:0;background:transparent;color:#c5d9e3}
 button{border:1px solid #287181;border-radius:4px;padding:10px 14px;min-height:39px;font-weight:800;letter-spacing:.04em;cursor:pointer}
 #start{background:#00cfe8;color:#031015}
 #stop{background:#0b1b25;color:#c5d9e3}
-#test,#replay{background:#09212a;color:#70ecff}
+#test,#replay,#speak{background:#09212a;color:#70ecff}
 button:disabled{opacity:.38;cursor:not-allowed}
 #status{font:12px/1.5 system-ui;color:#79bdc9;flex:1;min-width:170px}
 #heard{font-size:12px;line-height:1.5;color:#a8c5d3;margin-top:7px;min-height:17px;overflow-wrap:anywhere}
@@ -28,6 +28,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
     <button id="start" type="button">🎙 ACTIVATE LISTENING</button>
     <button id="test" type="button">🔊 TEST VOICE</button>
     <button id="replay" type="button" disabled>↻ REPLAY LAST</button>
+    <button id="speak" type="button" disabled>🗣 SPEAK ANSWER</button>
     <button id="stop" type="button">■ STOP</button>
     <div id="status" role="status" aria-live="polite"><span id="pulse" class="pulse"></span>Voice link idle.</div>
   </div>
@@ -40,6 +41,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
   const stopButton = document.getElementById("stop");
   const testButton = document.getElementById("test");
   const replayButton = document.getElementById("replay");
+  const speakButton = document.getElementById("speak");
   const statusNode = document.getElementById("status");
   const pulseNode = document.getElementById("pulse");
   const heardNode = document.getElementById("heard");
@@ -280,6 +282,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
       setStatus("Speech playback failed (" + reason + "). Click REPLAY LAST to retry.");
       if (desiredListening) scheduleRestart(250);
     };
+    const speechStartTimeout = requestedKind === "reply" ? 8000 : 6000;
     speechStartWatchdog = setTimeout(() => {
       if (generation !== speechGeneration || currentSpeechStarted || !speaking) return;
       if (requestedKind === "reply" && retryAttempt < 1) {
@@ -297,7 +300,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
       awaitingReply = false;
       setStatus("The browser did not start automatic speech. Click REPLAY LAST to speak the saved reply.");
       if (desiredListening) scheduleRestart(250);
-    }, 1800);
+    }, speechStartTimeout);
     try {
       speech.speak(utterance);
       // Older browsers can be left paused even after resume() called above.
@@ -355,12 +358,27 @@ button:disabled{opacity:.38;cursor:not-allowed}
     speakUpdate(lastSpokenText, Date.now(), lastSpokenKind || "reply");
   });
 
+  // This button reads the latest answer directly from the latest Streamlit render.
+  // It provides a genuine user click path even if automatic speech was blocked or delayed.
+  speakButton.addEventListener("click", () => {
+    const latestAnswer = String(args.speech_text || "").trim();
+    if (!latestAnswer) {
+      setStatus("No AI answer text has reached the voice panel yet.");
+      return;
+    }
+    userStopped = false;
+    awaitingReply = false;
+    setStatus("Manual speech requested for the latest app answer…", true);
+    speakUpdate(latestAnswer, Number(args.speech_sequence || Date.now()), "reply");
+  });
+
   startButton.addEventListener("click", startListening);
   stopButton.addEventListener("click", stopListening);
 
   window.addEventListener("message", event => {
     if (!event.data || event.data.type !== "streamlit:render") return;
     args = event.data.args || {};
+    speakButton.disabled = !String(args.speech_text || "").trim();
     startButton.disabled = !args.enabled || desiredListening;
     startButton.textContent = desiredListening ? "● LISTENING" : "🎙 ACTIVATE LISTENING";
     stopButton.disabled = !desiredListening && !speaking;
@@ -409,7 +427,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
         setStatus("Speech recognition unsupported. TEST VOICE still works; use Chrome/Edge for listening.");
       }
     }
-    window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: 156}, "*");
+    window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: 190}, "*");
   });
 
   window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1}, "*");
