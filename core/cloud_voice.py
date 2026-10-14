@@ -152,7 +152,7 @@ def answer_voice_query(
         + "\n\nSpoken question: "
         + question
         + (
-            "\n\nA fresh frame from the live camera is attached. Base answers about the current scene on this image. "
+            "\n\nA fresh camera frame from the live camera is attached. Base answers about the current scene on this image. "
             "You may use the recent observation and local detector labels as supporting evidence."
             if live_image_bytes else
             "\n\nNo fresh camera frame is attached. Use the latest cached visual observation only as prior evidence, "
