@@ -22,7 +22,16 @@ MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 REQUEST_TIMEOUT = (10, 90)
 
 MODES: dict[str, str] = {
-    "auto_observe": "Perform a detailed but grounded visual inventory. Under SCENE, report the overall scene and setting. Under VISIBLE OBJECTS AND POSITIONS, list clearly visible everyday objects and their approximate positions (upper/lower/left/center/right and foreground/background when clear), plus visible color, shape, or state only when supported. Under ACTIONS, report visible actions or activities without guessing a person's identity, intentions, relationships, or emotions. Under READABLE TEXT, copy only clearly readable text and mark uncertain parts as unclear. Under UNCERTAINTIES, mention ambiguous or partly hidden objects and what prevents certainty. Include as many useful visible details as the frame reasonably supports. Do not claim to detect everything or invent things outside the frame.",
+    "auto_observe": (
+        "Inspect the image carefully and produce a detailed, evidence-based observation using these headings: "
+        "SCENE; VISIBLE OBJECTS AND POSITIONS; ACTIONS AND INTERACTIONS; FINE DETAILS; READABLE TEXT; UNCERTAINTIES. "
+        "Inventory each clearly visible object separately when possible. Include approximate position, foreground/background, "
+        "visible color, shape, relative size, orientation, and condition only when genuinely supported. Describe spatial "
+        "relationships and what is actually happening in the frame. Pay special attention to smaller objects, items being "
+        "handled, signs, labels, and background details if they are clear enough to report. Copy only legible text and mark "
+        "partially readable text as uncertain. Do not infer identity, emotion, intent, relationships, or events outside "
+        "this single frame; do not guess obscured or ambiguous objects or claim the inventory is complete."
+    ),
     "scene": "Describe the visible scene in 2–4 concise sentences. Mention only clearly visible objects, actions, and setting.",
     "objects": "List clearly visible objects and say where each appears in the frame (left, center, right, foreground, or background). Do not invent unseen objects.",
     "read_text": "Transcribe only text that is visibly readable in the image. Preserve wording. Mark uncertain text as [unclear]. Do not invent missing words.",
@@ -91,9 +100,11 @@ def prepare_image(image_bytes: bytes, max_side: int = 512) -> tuple[Image.Image,
 def build_prompt(mode: str, focus: str = "") -> str:
     task = MODES.get(mode, MODES["scene"])
     prompt = (
-        "You are VisionQuest, a cautious visual assistant. Report only what the image supports. "
-        "Do not identify a person, infer a relationship, diagnose a health condition, or guess emotions "
-        "or personal history. If unsure, say what is uncertain. Do not greet the user or give generic advice.\n\nTask: "
+        "You are VisionQuest, a precise visual observation assistant. Carefully inspect the supplied image and report "
+        "specific visible evidence rather than a vague summary. Distinguish direct observations from uncertainty. Do not "
+        "identify a person, infer relationships or personal history, diagnose health conditions, or guess emotions or intent. "
+        "Do not invent off-screen details, and do not treat likely guesses as facts. Avoid repeating the same detail. "
+        "Do not greet the user or give generic advice.\n\nTask: "
         + task
     )
     if focus.strip():
@@ -133,14 +144,20 @@ def analyze_image(
 
     image, original_size = prepare_image(image_bytes, max_side=max_side)
     buffer = BytesIO()
-    image.save(buffer, format="JPEG", quality=82, optimize=True)
+    # Preserve fine visual details for the hosted vision-language model. Live camera
+    # samples are downsized before this step, so high JPEG quality does not create pixels.
+    image.save(buffer, format="JPEG", quality=95, optimize=True)
     image_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
     data_url = "data:image/jpeg;base64," + image_b64
 
+    # Detailed live observations need a larger response budget than simple scene summaries.
+    max_tokens = 700 if mode == "auto_observe" else (
+        500 if mode in ("objects", "read_text", "visual_question") else 320
+    )
     payload = {
         "model": MODEL_ID,
         "stream": False,
-        "max_tokens": 320,
+        "max_tokens": max_tokens,
         "messages": [{
             "role": "user",
             "content": [
