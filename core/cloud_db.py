@@ -1,4 +1,4 @@
-"""SQLite demo vault shared by the cloud app's authenticated viewers."""
+"""Long-term memory store using managed PostgreSQL or development SQLite."""
 from __future__ import annotations
 
 import csv
