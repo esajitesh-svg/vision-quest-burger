@@ -346,6 +346,17 @@ def render_live_analyser():
        st.session_state.opencv_detections = result.detections
        st.session_state.opencv_detection_last_run = time.monotonic()
        st.session_state.opencv_detection_elapsed = result.elapsed_seconds
+       if st.session_state.get("archive_auto_save", True):
+        try:
+         archive_event("object_detection", {
+          "detections": result.detections,
+          "model": REALTIME_DETECTOR_LABEL,
+          "inference_seconds": result.elapsed_seconds,
+          "frame_width": result.image_size[0],
+          "frame_height": result.image_size[1],
+         }, current_archive_tags())
+        except Exception as archive_exc:
+         st.session_state.opencv_detection_error = "Detected objects, but local archive failed: " + str(archive_exc)
       except Exception as detector_exc:
        st.session_state.opencv_detection_error = f"{type(detector_exc).__name__}: {detector_exc}"
     elif not detect_objects:
@@ -400,8 +411,24 @@ with l:
   eid=str(voice_event.get("event_id",""))
   if eid and eid!=st.session_state.voice_event_id:
    st.session_state.voice_event_id=eid
-   if voice_event.get("event")=="transcript": voice_question=str(voice_event.get("transcript","")).strip()
-   elif voice_event.get("event")=="status": st.session_state.status=str(voice_event.get("message","READY"))[:100]
+   if voice_event.get("event")=="transcript":
+    voice_question=str(voice_event.get("transcript","")).strip()
+   elif voice_event.get("event")=="status":
+    st.session_state.status=str(voice_event.get("message","READY"))[:100]
+   elif voice_event.get("event")=="audio_archive":
+    try:
+     encoded_audio = str(voice_event.get("audio_base64",""))
+     if not encoded_audio or len(encoded_audio) > 12_000_000:
+      raise ValueError("Audio clip is empty or too large. Record a shorter clip.")
+     audio_bytes = base64.b64decode(encoded_audio, validate=True)
+     mime_type = str(voice_event.get("mime_type","audio/webm")).split(";")[0].strip().lower()
+     extension = "m4a" if mime_type == "audio/mp4" else ("wav" if mime_type == "audio/wav" else "webm")
+     path = save_media("audio", audio_bytes, extension, mime_type, current_archive_tags(),
+                       {"maximum_recording_seconds":30, "source":"explicit browser audio recording"})
+     archive_event("audio_recording", {"file":str(path), "maximum_recording_seconds":30}, current_archive_tags())
+     st.success(f"Microphone clip saved locally: {path}")
+    except Exception as audio_exc:
+     st.error(f"Could not save the audio clip: {type(audio_exc).__name__}: {audio_exc}")
  st.markdown('</div>',unsafe_allow_html=True)
 with r:
  st.markdown('<div class="panel"><div class="kicker">03 / LIVE CAMERA FEED</div>',unsafe_allow_html=True)
@@ -618,9 +645,19 @@ if send or voice_question:
      reply=ask_granite(transcript,latest_observation=latest,memories=memories,conversation_history=[{"question":x["q"],"reply":x["a"]} for x in st.session_state.chat[-4:]],image_bytes=live if needs_live_image else None)
    st.session_state.chat.append({"q":transcript,"a":reply}); st.session_state.chat=st.session_state.chat[-12:]; st.session_state.status="DEMO REPLY READY" if mode == "DEMO MODE" else "REPLY READY"
    st.session_state.last_transcript=transcript; st.session_state.speech_text=reply; st.session_state.speech_seq+=1
-   if mode == "LIVE MODE":
+   if mode == "LIVE MODE" and st.session_state.get("archive_auto_save", True):
     try: save_conversation_turn(transcript,reply,source="Simple Smriti",used_live_camera=live is not None)
     except Exception: pass
+   if st.session_state.get("archive_auto_save", True):
+    try:
+     archive_event("conversation_turn", {
+      "question": transcript,
+      "answer": reply,
+      "mode": mode,
+      "used_live_camera": live is not None,
+     }, current_archive_tags())
+    except Exception as archive_exc:
+     st.warning(f"Conversation reply succeeded, but local archive failed: {type(archive_exc).__name__}: {archive_exc}")
    st.rerun()
  except Exception as e: st.session_state.status="VOICE / ANSWER ERROR"; st.error(f"Could not complete the conversation: {type(e).__name__}: {e}")
 if st.session_state.chat:
