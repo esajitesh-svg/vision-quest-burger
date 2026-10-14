@@ -44,6 +44,14 @@ class LiveVoiceAssistantState:
         self._latest_used_live_camera = False
         self._history: list[dict[str, str]] = []
         self._dropped_turns = 0
+        self._audio_frames = 0
+        self._last_audio_frame_at = 0.0
+
+    def note_audio_frame(self) -> None:
+        """Record that a WebRTC microphone frame actually reached the server."""
+        with self.lock:
+            self._audio_frames += 1
+            self._last_audio_frame_at = time.monotonic()
 
     def set_streaming(self, active: bool) -> None:
         with self.lock:
@@ -173,6 +181,11 @@ class LiveVoiceAssistantState:
                 "history": [dict(turn) for turn in self._history],
                 "dropped_turns": self._dropped_turns,
                 "speech_active": self._speech_active,
+                "audio_frames": self._audio_frames,
+                "audio_age_seconds": (
+                    max(0.0, time.monotonic() - self._last_audio_frame_at)
+                    if self._last_audio_frame_at else None
+                ),
             }
 
 
