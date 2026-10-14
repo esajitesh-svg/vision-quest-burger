@@ -10,7 +10,7 @@ from core.cloud_vision import MODE_LABELS, build_prompt, prepare_image, MAX_UPLO
 
 
 def test_every_visible_vision_mode_has_a_grounded_prompt():
-    expected = {"scene", "objects", "read_text", "accessibility", "visual_question"}
+    expected = {"auto_observe", "scene", "objects", "read_text", "accessibility", "visual_question"}
     assert set(MODE_LABELS) == expected
     for mode in MODE_LABELS:
         prompt = build_prompt(mode)
@@ -44,3 +44,12 @@ def test_prepare_image_rejects_empty_and_invalid_data():
 def test_prepare_image_rejects_oversized_upload():
     with pytest.raises(ValueError, match="8 MB"):
         prepare_image(b"x" * (MAX_UPLOAD_BYTES + 1))
+
+def test_auto_observe_prompt_covers_scene_objects_actions_and_text():
+    prompt = build_prompt("auto_observe")
+    assert "overall scene and setting" in prompt
+    assert "everyday objects" in prompt
+    assert "visible actions or activities" in prompt
+    assert "readable text" in prompt
+    assert "Do not claim to detect everything" in prompt
+\n
