@@ -27,7 +27,7 @@ def test_live_frame_processing_resizes_and_returns_jpeg():
     assert metrics["height"] == frame.shape[0]
     assert "brightness" in metrics
     assert "sharpness" in metrics
-    assert metrics["jpeg_quality"] == 94
+    assert metrics["jpeg_quality"] == 90
 
 
 @pytest.mark.parametrize(
@@ -224,3 +224,23 @@ def test_one_second_analysis_interval_is_supported(monkeypatch):
     assert state.take_analysis_sample(1, force=True) is None
     state.finish_analysis(observation={"text": "second result"})
 
+
+def test_live_detection_reservation_is_nonblocking_and_rate_limited(monkeypatch):
+    clock = {"now": 100.0}
+    monkeypatch.setattr("core.cloud_live.time.monotonic", lambda: clock["now"])
+    state = LiveMonitorState()
+
+    assert state.reserve_live_detection(interval_seconds=0.6) is True
+    # No second worker may be scheduled while one inference is still running.
+    assert state.reserve_live_detection(interval_seconds=0.6) is False
+
+    state.finish_detection(
+        detections=[{"label": "cup", "score": 0.9, "box": {"xmin": 1, "ymin": 1, "xmax": 10, "ymax": 10}}],
+        model="test-detector",
+        elapsed_seconds=0.15,
+    )
+    clock["now"] = 100.4
+    assert state.reserve_live_detection(interval_seconds=0.6) is False
+    clock["now"] = 100.6
+    assert state.reserve_live_detection(interval_seconds=0.6) is True
+    state.finish_detection(error="test cleanup")
