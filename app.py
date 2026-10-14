@@ -484,7 +484,7 @@ with vision_tab:
                 value=False,
                 disabled=not status[0],
                 key="live_jarvis_voice_enabled",
-                help="Enables the browser-native voice panel. Start the camera, then press ACTIVATE LISTENING and allow microphone permission when asked. No camera restart is required.",
+                help="Enables browser-native voice questions. Press ACTIVATE LISTENING and allow microphone permission; the camera is optional for general questions and is needed only for live visual answers.",
             )
         with voice_cols[1]:
             live_voice_narrate_scenes = st.checkbox(
@@ -501,6 +501,7 @@ with vision_tab:
         if live_voice_enabled:
             st.info(
                 "JARVIS MODE IS OPT-IN: browser microphone listening starts only after you press ACTIVATE LISTENING below. "
+                "The camera is optional for general questions; start it when you want Smriti to describe the live view. "
                 "The voice link pauses while Smriti speaks. Press STOP to end listening."
             )
         live_auto_save_observations = st.checkbox(
@@ -1030,7 +1031,7 @@ with vision_tab:
                 # path; the AI reply still depends on the hosted model and internet.
                 if live_voice_enabled:
                     voice_event = browser_voice_component(
-                        enabled=bool(is_playing and live_voice_enabled and status[0]),
+                        enabled=bool(live_voice_enabled and status[0]),
                         busy=bool(voice_snapshot["processing"]),
                         language=st.session_state.get("voice_language", "en-IN"),
                         rate=float(st.session_state.get("voice_rate", 0.92)),
@@ -1072,7 +1073,10 @@ with vision_tab:
                     if is_playing:
                         st.success("🎙 LIVE JARVIS READY · activate listening in the voice panel above, then speak naturally")
                     else:
-                        st.warning("Start the camera first, then activate the browser voice panel. Press STOP in the voice panel to end listening.")
+                        st.info(
+                            "🎙 LIVE JARVIS VOICE READY · activate listening in the voice panel above for general questions. "
+                            "Start the camera only when you want answers about what is currently visible."
+                        )
                     st.caption(
                         "AI status: generating a reply…" if voice_snapshot["processing"]
                         else ("Reply completed." if voice_snapshot["latest_reply"] else "Ready for your first spoken question.")
