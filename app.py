@@ -985,6 +985,7 @@ with vision_tab:
                         speech_text=st.session_state.get("live_jarvis_browser_speech_text", ""),
                         speech_sequence=int(st.session_state.get("live_jarvis_browser_speech_sequence", 0)),
                         last_transcript=voice_snapshot.get("latest_transcript", ""),
+                        voice_error=voice_snapshot.get("error", ""),
                         key="smriti_live_browser_voice",
                         default=None,
                     )
