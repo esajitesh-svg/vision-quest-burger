@@ -282,8 +282,11 @@ def render_video_archive_controls():
    if st.button("START VIDEO RECORDING · MAX 60 SECONDS", use_container_width=True, key="start_local_video_recording", disabled=frame_age > 5.0):
     try:
      start_local_video_capture(state, current_archive_tags())
-     archive_event("video_recording_started", {"limit_seconds": 60}, current_archive_tags())
      st.success("Video recording started.")
+     try:
+      archive_event("video_recording_started", {"limit_seconds": 60}, current_archive_tags())
+     except Exception as log_exc:
+      st.warning(f"Recording started, but its start event could not be indexed: {type(log_exc).__name__}: {log_exc}")
     except Exception as exc:
      st.error(f"Could not start video recording: {type(exc).__name__}: {exc}")
   elif active:
@@ -462,7 +465,10 @@ with l:
      extension = "m4a" if mime_type == "audio/mp4" else ("wav" if mime_type == "audio/wav" else "webm")
      path = save_media("audio", audio_bytes, extension, mime_type, current_archive_tags(),
                        {"maximum_recording_seconds":30, "source":"explicit browser audio recording"})
-     archive_event("audio_recording", {"file":str(path), "maximum_recording_seconds":30}, current_archive_tags())
+     try:
+      archive_event("audio_recording", {"file":str(path), "maximum_recording_seconds":30}, current_archive_tags())
+     except Exception as log_exc:
+      st.warning(f"Audio was saved, but its extra event could not be indexed: {type(log_exc).__name__}: {log_exc}")
      st.success(f"Microphone clip saved locally: {path}")
     except Exception as audio_exc:
      st.error(f"Could not save the audio clip: {type(audio_exc).__name__}: {audio_exc}")
