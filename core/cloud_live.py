@@ -23,8 +23,13 @@ RECORD_FPS = 8.0
 MAX_FRAME_EDGE = 1920
 
 
-def process_live_frame(frame_bgr: np.ndarray, max_side: int = MAX_FRAME_EDGE, enhance: bool = False):
-    """Resize and inspect a single BGR video frame; return frame, JPEG bytes, metrics."""
+def process_live_frame(
+    frame_bgr: np.ndarray,
+    max_side: int = MAX_FRAME_EDGE,
+    enhance: bool = False,
+    encode_jpeg: bool = True,
+):
+    """Resize and inspect a BGR video frame; optionally encode it for later analysis."""
     if not isinstance(frame_bgr, np.ndarray) or frame_bgr.size == 0:
         raise ValueError("Received an empty camera frame.")
     if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
@@ -42,8 +47,19 @@ def process_live_frame(frame_bgr: np.ndarray, max_side: int = MAX_FRAME_EDGE, en
         frame = frame_bgr.copy()
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    brightness = float(cv2.mean(gray)[0])
-    sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    # Focus/brightness metrics need no full-resolution float64 Laplacian on every frame.
+    # Estimate detail on a <=640 px grayscale sample to reduce per-frame CPU/memory cost.
+    metric_scale = min(1.0, 640.0 / float(max(gray.shape[1], gray.shape[0])))
+    metric_gray = (
+        cv2.resize(
+            gray,
+            (max(1, int(round(gray.shape[1] * metric_scale))), max(1, int(round(gray.shape[0] * metric_scale)))),
+            interpolation=cv2.INTER_AREA,
+        )
+        if metric_scale < 1.0 else gray
+    )
+    brightness = float(cv2.mean(metric_gray)[0])
+    sharpness = float(cv2.Laplacian(metric_gray, cv2.CV_32F).var())
 
     if enhance:
         lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
@@ -52,9 +68,12 @@ def process_live_frame(frame_bgr: np.ndarray, max_side: int = MAX_FRAME_EDGE, en
         l_channel = clahe.apply(l_channel)
         frame = cv2.cvtColor(cv2.merge((l_channel, a_channel, b_channel)), cv2.COLOR_LAB2BGR)
 
-    ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-    if not ok:
-        raise RuntimeError("OpenCV could not encode this camera frame.")
+    encoded_bytes = b""
+    if encode_jpeg:
+        ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+        if not ok:
+            raise RuntimeError("OpenCV could not encode this camera frame.")
+        encoded_bytes = encoded.tobytes()
     height, width = frame.shape[:2]
     metrics = {
         "width": int(width),
@@ -63,10 +82,10 @@ def process_live_frame(frame_bgr: np.ndarray, max_side: int = MAX_FRAME_EDGE, en
         "sharpness": round(sharpness, 1),
         "brightness_label": "dark" if brightness < 55 else ("bright" if brightness > 205 else "normal"),
         "sharpness_label": "possibly soft/blurry" if sharpness < 45 else "reasonable edge detail",
-        "jpeg_bytes": int(encoded.nbytes),
+        "jpeg_bytes": len(encoded_bytes),
         "jpeg_quality": 90,
     }
-    return frame, encoded.tobytes(), metrics
+    return frame, encoded_bytes, metrics
 
 
 def render_cv_view(
@@ -208,6 +227,7 @@ class LiveMonitorState:
         self.latest_frame: np.ndarray | None = None
         self.latest_jpeg: bytes | None = None
         self.latest_analysis_jpeg: bytes | None = None
+        self.latest_analysis_frame_bgr: np.ndarray | None = None
         self.latest_metrics: dict[str, Any] = {}
         self.frame_count = 0
         self.last_frame_time = 0.0
@@ -243,14 +263,21 @@ class LiveMonitorState:
         jpeg_bytes: bytes,
         metrics: dict[str, Any],
         analysis_jpeg: bytes | None = None,
+        analysis_frame_bgr: np.ndarray | None = None,
     ) -> None:
         """Called from WebRTC's video callback thread. Do not call Streamlit here."""
         now = time.monotonic()
         with self.lock:
             self.latest_frame = frame_bgr.copy()
             self.latest_jpeg = bytes(jpeg_bytes)
-            # The user can inspect CV renderings, but AI receives the color analysis frame.
-            self.latest_analysis_jpeg = bytes(analysis_jpeg if analysis_jpeg is not None else jpeg_bytes)
+            # Hold the clean BGR frame for AI analysis and encode it only when a
+            # scene-analysis request is actually reserved, not on every video frame.
+            if analysis_frame_bgr is not None:
+                self.latest_analysis_frame_bgr = analysis_frame_bgr
+                self.latest_analysis_jpeg = None
+            else:
+                self.latest_analysis_frame_bgr = None
+                self.latest_analysis_jpeg = bytes(analysis_jpeg if analysis_jpeg is not None else jpeg_bytes)
             self.latest_metrics = dict(metrics)
             self.frame_count += 1
             self.last_frame_time = now
@@ -361,18 +388,42 @@ class LiveMonitorState:
                     pass
         self.video_size = None
 
-    def take_analysis_sample(self, interval_seconds: int, force: bool = False) -> bytes | None:
-        """Reserve newest frame for one analysis; force bypasses sampling interval."""
+    def take_analysis_sample(
+        self,
+        interval_seconds: int,
+        force: bool = False,
+        max_side: int = 768,
+    ) -> bytes | None:
+        """Reserve the newest frame and encode it at the requested detail only once."""
         now = time.monotonic()
         with self.lock:
-            if self.analysis_busy or not self.latest_analysis_jpeg:
+            if self.analysis_busy or (
+                not self.latest_analysis_jpeg and self.latest_analysis_frame_bgr is None
+            ):
                 return None
             interval = min(60, max(1, int(interval_seconds)))
             if not force and self.last_analysis_started is not None and now - self.last_analysis_started < interval:
                 return None
             self.analysis_busy = True
             self.last_analysis_started = now
-            return bytes(self.latest_analysis_jpeg)
+            if self.latest_analysis_jpeg:
+                return bytes(self.latest_analysis_jpeg)
+            frame = self.latest_analysis_frame_bgr.copy()
+
+        max_side = max(64, min(int(max_side), MAX_FRAME_EDGE))
+        height, width = frame.shape[:2]
+        scale = min(1.0, max_side / float(max(width, height)))
+        if scale < 1.0:
+            frame = cv2.resize(
+                frame,
+                (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+                interpolation=cv2.INTER_AREA,
+            )
+        ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+        if not ok:
+            self.finish_analysis(error="OpenCV could not encode a frame for scene analysis.")
+            return None
+        return encoded.tobytes()
 
     def finish_analysis(self, observation: dict[str, Any] | None = None, error: str = "") -> None:
         with self.lock:
