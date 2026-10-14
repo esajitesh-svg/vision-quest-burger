@@ -153,7 +153,7 @@ assert.equal(utterances.filter(u => u.text === "This answer should retry automat
 
 // A reply that exists before the iframe's first render must not be marked consumed silently.
 const secondElements = Object.fromEntries(
-  ["start", "stop", "test", "replay", "status", "pulse", "heard"].map(id => [id, new FakeElement(id)])
+  ["start", "stop", "test", "replay", "speak", "status", "pulse", "heard"].map(id => [id, new FakeElement(id)])
 );
 const secondListeners = {};
 const secondUtterances = [];
