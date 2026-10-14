@@ -26,7 +26,7 @@ import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
 from streamlit_webrtc import VideoHTMLAttributes, WebRtcMode, webrtc_streamer
 
-from core.cloud_db import init_db, list_people, list_memories, save_person, save_memory, search_memories, export_memories_csv
+from core.cloud_db import init_db, list_people, list_memories, save_person, save_memory, search_memories, search_memories_for_voice, export_memories_csv
 from core.cloud_vision import MODE_LABELS, analyze_image, model_status, prepare_image
 from core.realtime_detector import REALTIME_DETECTOR_LABEL, RealtimeYOLOXDetector
 from core.live_report import build_live_report
@@ -217,7 +217,7 @@ def run_live_voice_worker(voice_state, live_state, pcm_clip: bytes) -> None:
             voice_observation.setdefault("mode", "live_camera")
         # Give the assistant the notes most relevant to this utterance rather than
         # the ten newest notes, which may belong to a completely different topic.
-        relevant_memories = search_memories(transcript, limit=10)
+        relevant_memories = search_memories_for_voice(transcript, limit=10)
         reply = answer_voice_query(
             transcript,
             latest_observation=voice_observation or None,
@@ -405,26 +405,38 @@ with vision_tab:
         st.markdown("<div class='cv-workbench-label'>01 / LIVE SENSOR INPUT · WEBCAM</div><div class='cv-feed-heading'>LIVE OPTICAL FEED // REAL-TIME CV PIPELINE</div>", unsafe_allow_html=True)
         st.write("VisionQuest prioritizes a responsive live video feed. Local OpenCV DNN object detection runs asynchronously on a recent frame instead of blocking every video frame; boxes update periodically and disappear when too old. A separate hosted vision-language model explains sampled scenes.")
         st.caption("Smooth-first defaults: Standard 640×360 at about 10 FPS, with automatic scene analysis and local object detection initially off. Turn either on only when needed. HD and Full HD remain selectable for more detail; hosted AI analysis can still take time after you request it. Use consented test scenes.")
-        with st.expander("⚙️ PERCEPTION / CAMERA CONTROLS", expanded=False):
+        st.markdown(
+            "<div class='cv-workbench-label'>02 / JARVIS VOICE LINK · LIVE COMPANION</div>",
+            unsafe_allow_html=True,
+        )
+        voice_cols = st.columns(2, gap="small")
+        with voice_cols[0]:
             live_voice_enabled = st.checkbox(
-                "Enable LIVE JARVIS voice (microphone streams until STOP)",
+                "Enable LIVE JARVIS listening + replies",
                 value=False,
                 disabled=not status[0],
                 key="live_jarvis_voice_enabled",
-                help="Requires the hosted voice/vision provider configuration. Turn this on, then STOP and START the camera again so the browser asks for microphone permission. Audio is sent to the cloud only while this live session is running.",
+                help="Explicitly enables microphone input while the camera session is running. After switching this on, STOP and START the camera again and allow microphone permission.",
             )
+        with voice_cols[1]:
             live_voice_narrate_scenes = st.checkbox(
-                "Speak fresh camera descriptions aloud",
+                "Speak new camera observations aloud",
                 value=True,
                 disabled=not live_voice_enabled or not status[0],
                 key="live_jarvis_camera_narration",
-                help="When live voice is enabled, periodically describe new camera observations aloud using the website's existing voice.",
+                help="When enabled, Smriti describes fresh camera observations aloud and also speaks replies to your questions.",
             )
-            if live_voice_enabled:
-                st.warning(
-                    "LIVE MICROPHONE MODE: your mic remains active while the WebRTC session runs. "
-                    "Stop the camera player to turn it off. After changing this switch, STOP and START again."
-                )
+        st.caption(
+            "Talk naturally, then pause briefly for a reply. Keep the camera running for live visual answers. "
+            "Use the MEMORY INDEX to save facts you want Smriti to recall; broad prompts such as 'I forgot, help me remember' can draw from recent saved notes."
+        )
+        if live_voice_enabled:
+            st.info(
+                "JARVIS MODE IS OPT-IN: your microphone is active only during the running camera session. "
+                "After turning this on, STOP and START the camera once and allow mic access. Click STOP to end listening."
+            )
+
+        with st.expander("⚙️ PERCEPTION / CAMERA CONTROLS", expanded=False):
             live_auto_analyze = st.checkbox(
                 "Enable automatic scene explanation",
                 value=False,
