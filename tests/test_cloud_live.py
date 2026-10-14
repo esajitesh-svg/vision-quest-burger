@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import pytest
 
-from core.cloud_live import LiveMonitorState, process_live_frame, render_cv_view
+from core.cloud_live import LiveMonitorState, process_live_frame, render_cv_view, draw_detection_overlay
 
 
 def _test_frame(width: int = 640, height: int = 360) -> np.ndarray:
@@ -60,6 +60,59 @@ def test_display_pipeline_is_separate_from_ai_analysis_frame():
     state.update_frame(display, display_jpeg, metrics, analysis_jpeg=color_jpeg)
     assert state.snapshot()[0] == display_jpeg
     assert state.take_analysis_sample(1) == color_jpeg
+
+
+def test_detection_overlay_draws_confidence_boxes():
+    frame = _test_frame()
+    detections = [{
+        "label": "bottle",
+        "score": 0.93,
+        "box": {"xmin": 50, "ymin": 50, "xmax": 180, "ymax": 200},
+    }]
+    rendered = draw_detection_overlay(frame, detections, age_seconds=1.0)
+    assert rendered.shape == frame.shape
+    assert rendered.dtype == frame.dtype
+    assert np.any(rendered != frame)
+
+
+def test_detection_overlay_ignores_stale_results():
+    frame = _test_frame()
+    detections = [{
+        "label": "bottle",
+        "score": 0.93,
+        "box": {"xmin": 50, "ymin": 50, "xmax": 180, "ymax": 200},
+    }]
+    rendered = draw_detection_overlay(frame, detections, age_seconds=20.0)
+    assert np.array_equal(rendered, frame)
+
+
+def test_detection_state_serializes_requests_and_tracks_results(monkeypatch):
+    clock = {"now": 100.0}
+    monkeypatch.setattr("core.cloud_live.time.monotonic", lambda: clock["now"])
+    state = LiveMonitorState()
+    frame, encoded, metrics = process_live_frame(_test_frame())
+    state.update_frame(frame, encoded, metrics)
+
+    sample = state.take_detection_sample(3)
+    assert sample == encoded
+    assert state.take_detection_sample(3) is None
+
+    detection = {
+        "label": "cup",
+        "score": 0.88,
+        "box": {"xmin": 2, "ymin": 3, "xmax": 50, "ymax": 60},
+    }
+    state.finish_detection([detection], model="test-detector", elapsed_seconds=0.5)
+    snapshot = state.detection_snapshot()
+    assert snapshot["detections"][0]["label"] == "cup"
+    assert snapshot["model"] == "test-detector"
+    assert snapshot["elapsed_seconds"] == 0.5
+    assert snapshot["age_seconds"] == 0.0
+    assert state.take_detection_sample(3) is None
+    clock["now"] = 103.0
+    assert state.take_detection_sample(3) == encoded
+    state.finish_detection(error="sample failure")
+    assert state.detection_snapshot()["error"] == "sample failure"
 
 
 def test_live_frame_rejects_empty_input():
