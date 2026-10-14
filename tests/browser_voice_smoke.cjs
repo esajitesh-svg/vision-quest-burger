@@ -128,7 +128,8 @@ const baseArgs = {
   speech_sequence: 0,
   speech_kind: "reply",
   last_transcript: "",
-  voice_error: ""
+  voice_error: "",
+  answer_text: ""
 };
 
 render({ ...baseArgs });
@@ -155,12 +156,22 @@ assert.ok(posted.some(message =>
   && message.value.transcript === "Hi Smriti, what can you do?"
 ), "final recognized questions must be sent to the Streamlit app");
 
-render({ ...baseArgs, speech_text: "The camera sees a blue notebook.", speech_sequence: 1 });
-assert.equal(utterances.length, countAfterTest + 1, "new AI reply should be sent to speechSynthesis");
-assert.equal(utterances.at(-1).text, "The camera sees a blue notebook.");
+render({
+  ...baseArgs,
+  speech_text: "A notebook is visible in the camera view.",
+  answer_text: "You asked what I can do. I can describe the scene and help you recall saved notes.",
+  speech_sequence: 1,
+  speech_kind: "camera narration"
+});
+assert.equal(utterances.length, countAfterTest + 1, "new narration should be sent to speechSynthesis");
+assert.equal(utterances.at(-1).text, "A notebook is visible in the camera view.");
 assert.equal(elements.speak.disabled, false, "SPEAK ANSWER should enable once the app has an answer");
 elements.speak.click();
-assert.equal(utterances.at(-1).text, "The camera sees a blue notebook.", "manual answer playback should use current app text");
+assert.equal(
+  utterances.at(-1).text,
+  "You asked what I can do. I can describe the scene and help you recall saved notes.",
+  "manual answer playback must speak latest JARVIS answer, not the most recent camera narration"
+);
 
 // Simulate a browser that fails to start the first AI utterance. The component
 // should automatically retry once without requiring another user gesture.
