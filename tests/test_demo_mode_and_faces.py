@@ -44,3 +44,21 @@ def test_face_image_decoder_rejects_bad_data():
         assert "Could not read" in str(exc)
     else:
         raise AssertionError("Invalid image data should be rejected")
+
+
+from core.local_granite import clean_granite_reply
+
+
+def test_granite_reply_cleaner_hides_reasoning_trace():
+    raw = "Thinking...\nThinking Process:\n1. Analyse the prompt.\n2. Choose response."
+    result = clean_granite_reply(raw)
+    assert "Thinking Process" not in result
+    assert len(result) < 100
+
+
+def test_granite_reply_cleaner_removes_think_tag():
+    assert clean_granite_reply("<think>private reasoning</think>Hello!") == "Hello!"
+
+
+def test_granite_reply_cleaner_keeps_normal_short_reply():
+    assert clean_granite_reply("Hello, I'm ready to help.") == "Hello, I'm ready to help."
