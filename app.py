@@ -368,7 +368,7 @@ with vision_tab:
                 value=40,
                 step=5,
                 key="live_detection_confidence",
-                format_func=lambda x: f"{x}%",
+                format="%d%%",
                 help="Raise this to hide weaker predictions; lower it to see more possible objects with more false positives.",
             ) / 100.0
         live_opencv_always = st.checkbox("Keep OpenCV processing active on every live frame", value=True, key="live_opencv_always", help="OpenCV transforms each incoming frame while the camera is streaming. Turn this off only for troubleshooting.")
