@@ -59,8 +59,8 @@ class CameraState:
         self.count = 0
 
 class CameraProcessor:
-    def __init__(self):
-        self.state = st.session_state.camera_state
+    def __init__(self, state):
+        self.state = state
     def recv(self, frame):
         image = frame.to_ndarray(format="bgr24")
         with self.state.lock:
@@ -103,7 +103,7 @@ with right:
     ctx = webrtc_streamer(
         key="smriti-live-camera",
         mode=WebRtcMode.SENDRECV,
-        video_processor_factory=CameraProcessor,
+        video_processor_factory=lambda: CameraProcessor(st.session_state.camera_state),
         media_stream_constraints={"video": {"width": {"ideal": 1280}, "height": {"ideal": 720}, "frameRate": {"ideal": 20, "max": 24}}, "audio": False},
         async_processing=True,
     )
