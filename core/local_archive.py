@@ -44,7 +44,7 @@ def get_archive_dir() -> Path:
 
 def _clean_label(value: Any, limit: int = 80) -> str:
     """Keep human-entered tags readable while preventing control characters/path use."""
-    return re.sub(r"[\\x00-\\x1f\\x7f]", " ", str(value or "")).strip()[:limit]
+    return re.sub(r"[\x00-\x1f\x7f]", " ", str(value or "")).strip()[:limit]
 
 
 def clean_tags(tags: dict[str, Any] | None = None) -> dict[str, str]:
@@ -73,8 +73,8 @@ def archive_event(event_type: str, payload: dict[str, Any], tags: dict[str, Any]
     }
     encoded = json.dumps(entry, ensure_ascii=False, separators=(",", ":"), default=str)
     with _ARCHIVE_LOCK:
-        with target.open("a", encoding="utf-8", newline="\\n") as handle:
-            handle.write(encoded + "\\n")
+        with target.open("a", encoding="utf-8", newline="") as handle:
+            handle.write(encoded + "\n")
     return target
 
 
@@ -125,7 +125,7 @@ def save_media(
             "metadata": metadata or {},
         }
         with log.open("a", encoding="utf-8", newline="\\n") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False, default=str) + "\\n")
+            handle.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
     return target
 
 
