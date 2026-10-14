@@ -41,18 +41,11 @@ h1,h2,h3,p,label{color:#d9edf4}.panel{background:linear-gradient(145deg,#0b1821,
 div.stButton>button{background:#0e343c;color:#bffff8;border:1px solid #287c7b;border-radius:8px;min-height:42px}[data-testid="stTextInput"] input{background:#08151c;color:#e5fbff;border-color:#244a55}
 </style>""",unsafe_allow_html=True)
 st.markdown('<div class="brand">SMR // SMRITI AI</div><h1 style="margin:4px 0">Your visual memory companion</h1><div class="sub">LIVE CAMERA · VOICE COMPANION · CONTEXTUAL MEMORY</div>',unsafe_allow_html=True)
-mode = st.radio(
- "OPERATING MODE",
- ["DEMO MODE", "LIVE MODE"],
- horizontal=True,
- index=0,
- help="Demo Mode uses instant scripted sample replies without AI API calls. Live Mode uses the configured live AI services.",
- key="smriti_operating_mode",
-)
-if mode == "DEMO MODE":
- st.info("DEMO MODE — sample conversation and scene descriptions are simulated, not live AI results.")
-else:
- st.caption("LIVE MODE — real AI analysis requires a working configured AI service.")
+# Use the single top-level selector as the source of truth. A second selector
+# defaulting to DEMO MODE previously caused Analyze to return sample text even
+# while the user had selected Live Mode above.
+mode = experience_mode.upper()
+st.caption("LIVE MODE — camera analysis and answers use local Granite via Ollama.")
 st.markdown("<hr>", unsafe_allow_html=True)
 
 class CamState:
