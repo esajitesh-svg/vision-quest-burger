@@ -14,6 +14,8 @@ import hmac
 import io
 import os
 import time
+import wave
+import numpy as np
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Thread
@@ -32,6 +34,7 @@ from core.cloud_cv import process_image_opencv
 from core.cloud_live import LiveMonitorState, process_live_frame, draw_detection_overlay
 from core.voice import SUPPORTED_LANGUAGES, build_speech_html
 from core.cloud_voice import transcribe_audio, answer_voice_query
+from core.live_voice import LiveVoiceAssistantState, pcm16_to_wav
 
 ROOT = Path(__file__).resolve().parent
 
@@ -168,6 +171,38 @@ def run_live_vision_worker(live_state, sample_bytes: bytes, mode: str, question:
         live_state.finish_analysis(observation=observation)
     except Exception as exc:
         live_state.finish_analysis(error=f"{type(exc).__name__}: {exc}")
+
+
+def run_live_voice_worker(voice_state, live_state, pcm_clip: bytes) -> None:
+    """Transcribe one detected pause and answer using the newest available camera frame."""
+    try:
+        wav_clip = pcm16_to_wav(pcm_clip)
+        transcript = transcribe_audio(wav_clip, content_type="audio/wav")
+        _, _, frame_count, last_frame_time = live_state.snapshot()
+        image_bytes = None
+        frame_is_recent = (
+            frame_count > 0
+            and last_frame_time > 0
+            and (time.monotonic() - last_frame_time) <= 4.0
+        )
+        if frame_is_recent:
+            image_bytes = live_state.get_latest_analysis_jpeg(max_side=512)
+
+        live_status = live_state.get_status()
+        reply = answer_voice_query(
+            transcript,
+            latest_observation=live_status.get("latest_observation"),
+            memories=list_memories(limit=10),
+            conversation_history=voice_state.history_snapshot(),
+            live_image_bytes=image_bytes,
+        )
+        voice_state.finish_turn(
+            transcript,
+            reply,
+            used_live_camera=image_bytes is not None,
+        )
+    except Exception as exc:
+        voice_state.fail_turn(f"{type(exc).__name__}: {exc}")
 
 
 st.set_page_config(
@@ -322,6 +357,9 @@ init_db()
 if "live_monitor_state" not in st.session_state:
     st.session_state["live_monitor_state"] = LiveMonitorState()
 live_state: LiveMonitorState = st.session_state["live_monitor_state"]
+if "live_voice_assistant_state" not in st.session_state:
+    st.session_state["live_voice_assistant_state"] = LiveVoiceAssistantState()
+live_voice_state: LiveVoiceAssistantState = st.session_state["live_voice_assistant_state"]
 
 status = model_status()
 people = list_people()
@@ -362,6 +400,24 @@ with vision_tab:
         st.write("VisionQuest prioritizes a responsive live video feed. Local OpenCV DNN object detection runs asynchronously on a recent frame instead of blocking every video frame; boxes update periodically and disappear when too old. A separate hosted vision-language model explains sampled scenes.")
         st.caption("Smooth-first defaults: Standard 640×360 at about 10 FPS, with automatic scene analysis and local object detection initially off. Turn either on only when needed. HD and Full HD remain selectable for more detail; hosted AI analysis can still take time after you request it. Use consented test scenes.")
         with st.expander("⚙️ PERCEPTION / CAMERA CONTROLS", expanded=False):
+            live_voice_enabled = st.checkbox(
+                "Enable LIVE JARVIS voice (microphone streams until STOP)",
+                value=False,
+                key="live_jarvis_voice_enabled",
+                help="Turn this on, then STOP and START the camera again so the browser asks for microphone permission. Audio is sent to the cloud only while this live session is running.",
+            )
+            live_voice_narrate_scenes = st.checkbox(
+                "Speak fresh camera descriptions aloud",
+                value=True,
+                disabled=not live_voice_enabled or not status[0],
+                key="live_jarvis_camera_narration",
+                help="When live voice is enabled, periodically describe new camera observations aloud using the website's existing voice.",
+            )
+            if live_voice_enabled:
+                st.warning(
+                    "LIVE MICROPHONE MODE: your mic remains active while the WebRTC session runs. "
+                    "Stop the camera player to turn it off. After changing this switch, STOP and START again."
+                )
             live_auto_analyze = st.checkbox(
                 "Enable automatic scene explanation",
                 value=False,
@@ -501,7 +557,8 @@ with vision_tab:
             st.caption(
                 "Local YOLOX detects object categories on each frame delivered to the server. "
                 "The written scene explanation still uses sampled frames through the configured external vision provider. "
-                "Camera access needs your permission and a click on START; once started, the feed continues until stopped."
+                "Camera access needs your permission and a click on START; once started, the feed continues until stopped. "
+            "Live voice mode also requests microphone access and sends short speech segments to hosted transcription after a pause."
             )
 
         realtime_detector = None
@@ -525,6 +582,56 @@ with vision_tab:
                 "username": turn_username,
                 "credential": turn_credential,
             })
+
+        audio_resampler = None
+        if live_voice_enabled:
+            if "live_jarvis_audio_resampler" not in st.session_state:
+                st.session_state["live_jarvis_audio_resampler"] = av.AudioResampler(
+                    format="s16",
+                    layout="mono",
+                    rate=16000,
+                )
+            audio_resampler = st.session_state["live_jarvis_audio_resampler"]
+
+        def on_live_audio_frame(frame):
+            """Continuously receive mic frames, detect speech pauses, and queue short turns."""
+            try:
+                if audio_resampler is not None:
+                    for resampled in audio_resampler.resample(frame):
+                        samples = resampled.to_ndarray().reshape(-1).astype(np.int16, copy=False)
+                        completed_pcm = live_voice_state.ingest_pcm(samples, sample_rate=16000)
+                        if completed_pcm is not None:
+                            if live_voice_state.begin_processing():
+                                try:
+                                    Thread(
+                                        target=run_live_voice_worker,
+                                        args=(live_voice_state, live_state, completed_pcm),
+                                        daemon=True,
+                                    ).start()
+                                except Exception as exc:
+                                    live_voice_state.fail_turn(
+                                        f"Could not start voice worker: {type(exc).__name__}: {exc}"
+                                    )
+            except Exception as exc:
+                live_voice_state.fail_turn(
+                    f"Microphone frame error: {type(exc).__name__}: {exc}"
+                )
+            # Do not loop the microphone audio back to the visitor.
+            try:
+                silence = np.zeros_like(frame.to_ndarray())
+                muted_frame = av.AudioFrame.from_ndarray(
+                    silence,
+                    format=frame.format.name,
+                    layout=frame.layout.name,
+                )
+                muted_frame.sample_rate = frame.sample_rate
+                return muted_frame
+            except Exception:
+                return frame
+
+        def on_live_media_ended():
+            live_state.close()
+            live_voice_state.set_streaming(False)
 
         def on_live_video_frame(frame):
             try:
@@ -654,10 +761,18 @@ with vision_tab:
                         "height": {"ideal": live_capture_height},
                         "frameRate": {"ideal": 10, "max": 12},
                     },
-                    "audio": False,
+                    "audio": (
+                        {
+                            "echoCancellation": True,
+                            "noiseSuppression": True,
+                            "autoGainControl": True,
+                        }
+                        if live_voice_enabled else False
+                    ),
                 },
+                audio_frame_callback=on_live_audio_frame if live_voice_enabled else None,
                 async_processing=True,
-                on_video_ended=live_state.close,
+                on_video_ended=on_live_media_ended,
                 video_html_attrs=VideoHTMLAttributes(
                     autoPlay=True,
                     controls=True,
@@ -703,7 +818,10 @@ with vision_tab:
                             daemon=True,
                         ).start()
                         st.info("Scene analysis started. The live camera and object detector continue while the result is computed.")
-                elif is_playing and live_auto_analyze:
+                elif is_playing and (
+                    live_auto_analyze
+                    or (live_voice_enabled and live_voice_narrate_scenes)
+                ):
                     sample = live_state.take_analysis_sample(live_interval, max_side=live_max_side)
                     if sample is not None:
                         Thread(
@@ -713,12 +831,97 @@ with vision_tab:
                         ).start()
 
                 current_status = live_state.get_status()
+                live_voice_state.set_streaming(bool(is_playing and live_voice_enabled))
+                voice_snapshot = live_voice_state.snapshot()
+
+                # Use one stable speech-player payload. It is replaced only when a new
+                # spoken reply/narration arrives, not every one-second status refresh.
+                previous_reply_sequence = int(
+                    st.session_state.get("live_jarvis_seen_reply_sequence", 0)
+                )
+                reply_is_new = voice_snapshot["reply_sequence"] > previous_reply_sequence
+                latest_observation = current_status.get("latest_observation")
+                previous_observation_sequence = int(
+                    st.session_state.get("live_jarvis_seen_observation_sequence", 0)
+                )
+                observation_sequence = (
+                    int(latest_observation.get("sequence", 0))
+                    if latest_observation else 0
+                )
+
+                if live_voice_enabled and reply_is_new:
+                    st.session_state["live_jarvis_seen_reply_sequence"] = voice_snapshot["reply_sequence"]
+                    st.session_state["live_jarvis_speech_html"] = build_speech_html(
+                        voice_snapshot["latest_reply"],
+                        language=st.session_state.get("voice_language", "en-IN"),
+                        rate=float(st.session_state.get("voice_rate", 0.92)),
+                        widget_label="🔊 REPLAY JARVIS REPLY",
+                        autoplay=True,
+                    )
+                    st.session_state["live_jarvis_speech_kind"] = "reply"
+                    if observation_sequence:
+                        st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
+                elif (
+                    live_voice_enabled
+                    and live_voice_narrate_scenes
+                    and latest_observation
+                    and observation_sequence > previous_observation_sequence
+                ):
+                    st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
+                    reply_recent = (
+                        isinstance(voice_snapshot.get("reply_age_seconds"), (int, float))
+                        and voice_snapshot["reply_age_seconds"] < 8.0
+                    )
+                    if not voice_snapshot["processing"] and not reply_recent:
+                        narration_text = latest_observation.get("text", "")
+                        try:
+                            st.session_state["live_jarvis_speech_html"] = build_speech_html(
+                                narration_text,
+                                language=st.session_state.get("voice_language", "en-IN"),
+                                rate=float(st.session_state.get("voice_rate", 0.92)),
+                                widget_label="🔊 REPLAY CAMERA DESCRIPTION",
+                                autoplay=True,
+                            )
+                            st.session_state["live_jarvis_speech_kind"] = "camera narration"
+                        except ValueError:
+                            pass
+
                 if not is_playing:
                     st.info("Live monitor is idle. Click START in the camera player above and allow browser camera permission.")
                 elif frame_count:
                     st.success(f"Live stream active · {frame_count:,} frames received")
                 else:
                     st.info("Waiting for the first camera frame…")
+
+                if live_voice_enabled:
+                    if is_playing:
+                        st.success("🎙️ LIVE JARVIS MICROPHONE ACTIVE · speak naturally, then pause briefly for a reply")
+                    else:
+                        st.warning("LIVE JARVIS is enabled in settings. STOP/START the camera and approve microphone permission.")
+                    st.caption(f"Voice status: {voice_snapshot['status']}")
+                    if voice_snapshot["error"]:
+                        st.warning(f"Voice assistant: {voice_snapshot['error']}")
+                    if voice_snapshot["latest_transcript"]:
+                        st.markdown(f"**You:** {escape(voice_snapshot['latest_transcript'])}")
+                    if voice_snapshot["latest_reply"]:
+                        st.markdown(
+                            f"<div class='result'><b>JARVIS:</b> {escape(voice_snapshot['latest_reply'])}</div>",
+                            unsafe_allow_html=True,
+                        )
+                        if voice_snapshot["used_live_camera"]:
+                            st.caption("This reply used a recent live camera frame.")
+                    speech_html = st.session_state.get("live_jarvis_speech_html", "")
+                    if speech_html:
+                        st.components.v1.html(speech_html, height=100, scrolling=False)
+                    if live_voice_narrate_scenes:
+                        st.caption(
+                            f"Camera narration is on · new scene descriptions target every {live_interval} seconds. "
+                            "Actual timing depends on cloud inference and network latency."
+                        )
+                    st.caption(
+                        "Voice clips are assembled in memory and submitted after about 0.75 seconds of silence. "
+                        "The microphone remains active until you stop the WebRTC session."
+                    )
 
                 if snapshot_jpeg:
                     with st.expander("Latest OpenCV-processed frame", expanded=False):
