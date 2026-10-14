@@ -6,7 +6,14 @@ from pathlib import Path
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
 from core.cloud_vision import analyze_image, model_status
 from core.cloud_voice import answer_voice_query, transcribe_audio
-from core.cloud_db import search_activity_for_voice, save_conversation_turn, save_observation
+from core.cloud_db import (
+ init_db, list_people, save_person, save_person_portrait, get_person_portrait,
+ search_activity_for_voice, save_conversation_turn, save_observation,
+)
+from core.demo_mode import demo_observation, demo_reply
+from core.face_recognition import (
+ decode_image_bytes, detect_faces, encode_jpeg, recognize_faces,
+)
 from core.voice import build_speech_html
 
 st.set_page_config(page_title="Smriti AI",page_icon="✦",layout="wide",initial_sidebar_state="collapsed")
@@ -21,7 +28,20 @@ h1,h2,h3,p,label{color:#d9edf4}.panel{background:linear-gradient(145deg,#0b1821,
 .reply{background:#0a1b23;border-left:2px solid #50ebdf;border-radius:4px;padding:12px;line-height:1.6;white-space:pre-wrap}.log{font-family:monospace;color:#9ab7c2;font-size:12px;line-height:1.9}
 div.stButton>button{background:#0e343c;color:#bffff8;border:1px solid #287c7b;border-radius:8px;min-height:42px}[data-testid="stTextInput"] input{background:#08151c;color:#e5fbff;border-color:#244a55}
 </style>""",unsafe_allow_html=True)
-st.markdown('<div class="brand">SMR // SMRITI AI</div><h1 style="margin:4px 0">Your visual memory companion</h1><div class="sub">LIVE CAMERA · VOICE COMPANION · CONTEXTUAL MEMORY</div><hr>',unsafe_allow_html=True)
+st.markdown('<div class="brand">SMR // SMRITI AI</div><h1 style="margin:4px 0">Your visual memory companion</h1><div class="sub">LIVE CAMERA · VOICE COMPANION · CONTEXTUAL MEMORY</div>',unsafe_allow_html=True)
+mode = st.radio(
+ "OPERATING MODE",
+ ["DEMO MODE", "LIVE MODE"],
+ horizontal=True,
+ index=0,
+ help="Demo Mode uses instant scripted sample replies without AI API calls. Live Mode uses the configured live AI services.",
+ key="smriti_operating_mode",
+)
+if mode == "DEMO MODE":
+ st.info("DEMO MODE — sample conversation and scene descriptions are simulated, not live AI results.")
+else:
+ st.caption("LIVE MODE — real AI analysis requires a working configured AI service.")
+st.markdown("<hr>", unsafe_allow_html=True)
 
 class CamState:
  def __init__(self): self.lock=threading.Lock(); self.frame=None
@@ -34,6 +54,13 @@ class Processor:
 defaults={"cam_state":CamState(),"analysis":"No scene analysis yet. Start the camera and analyse a frame.","analysis_time":"Not run","chat":[],"audio_hash":"","voice_event_id":"","last_transcript":"","speech_text":"","speech_seq":0,"status":"READY"}
 for k,v in defaults.items():
  if k not in st.session_state: st.session_state[k]=v
+if "smriti_db_init_attempted" not in st.session_state:
+ try:
+  init_db()
+  st.session_state.smriti_db_init_error = ""
+ except Exception as db_exc:
+  st.session_state.smriti_db_init_error = f"{type(db_exc).__name__}: {db_exc}"
+ st.session_state.smriti_db_init_attempted = True
 
 l,r=st.columns([.8,1.5],gap="large")
 with l:
@@ -56,6 +83,73 @@ with r:
  st.caption("Allow camera access. Scene analysis runs when requested.")
  analyze=st.button("ANALYZE CURRENT FRAME",use_container_width=True)
  st.markdown('</div>',unsafe_allow_html=True)
+with st.expander("06 / FACE RECOGNITION — LOCAL ENROLMENT", expanded=False):
+ st.write("Register a reference portrait with the person's permission, then compare faces in the current camera frame. Portraits are stored in the configured app database.")
+ st.caption("Experimental matching can make mistakes. Confirm identity before relying on it. Faces that do not match confidently are shown as Unknown.")
+ consent = st.checkbox("I have permission to store and use this person's reference photo.", key="face_consent")
+ person_name = st.text_input("Person's chosen display name", key="face_name", max_chars=100)
+ relationship = st.text_input("Relationship / label", value="Friend / family", key="face_relationship", max_chars=100)
+ portrait_file = st.file_uploader("Reference photo (JPEG, PNG, WEBP; up to 3 MB)", type=["jpg", "jpeg", "png", "webp"], key="face_portrait_upload")
+ if st.button("REGISTER / UPDATE REFERENCE FACE", use_container_width=True, key="register_face_button"):
+  try:
+   if not consent:
+    st.warning("Please confirm permission before registering a face.")
+   elif not person_name.strip() or not relationship.strip():
+    st.warning("Enter a display name and relationship/label.")
+   elif portrait_file is None:
+    st.warning("Choose a reference photo first.")
+   else:
+    portrait_bytes = portrait_file.getvalue()
+    reference_frame = decode_image_bytes(portrait_bytes)
+    if not detect_faces(reference_frame):
+     st.warning("No face was detected in that photo. Choose a clear, front-facing photo with one visible face.")
+    else:
+     existing_people = list_people()
+     existing = next((p for p in existing_people if str(p.get("name", "")).casefold() == person_name.strip().casefold()), None)
+     if existing:
+      person_id = int(existing["id"])
+     else:
+      save_person(person_name.strip(), relationship.strip(), "Face matching enabled only with permission.")
+      person_id = int(next(p["id"] for p in list_people() if str(p.get("name", "")).casefold() == person_name.strip().casefold()))
+     stored_bytes = encode_jpeg(reference_frame)
+     save_person_portrait(person_id, stored_bytes, "image/jpeg")
+     st.success(f"Reference portrait saved for {person_name.strip()}.")
+  except Exception as face_exc:
+   st.error(f"Could not register portrait: {type(face_exc).__name__}: {face_exc}")
+ try:
+  registered_people = list_people()
+  with_portraits = []
+  for person in registered_people:
+   try:
+    if get_person_portrait(int(person["id"])):
+     with_portraits.append(person)
+   except Exception:
+    continue
+  st.caption(f"Registered portraits available: {len(with_portraits)}")
+ except Exception as list_exc:
+  with_portraits = []
+  st.warning(f"Person storage is unavailable: {type(list_exc).__name__}: {list_exc}")
+ if st.button("RECOGNIZE FACES IN CURRENT CAMERA FRAME", use_container_width=True, key="recognize_live_faces"):
+  try:
+   with st.session_state.cam_state.lock:
+    current_frame = st.session_state.cam_state.frame.copy() if st.session_state.cam_state.frame is not None else None
+   if current_frame is None:
+    st.warning("Start the camera and wait until a live frame arrives.")
+   elif not with_portraits:
+    st.warning("Register at least one consented reference portrait first.")
+   else:
+    with st.spinner("Matching current faces to locally stored reference portraits…"):
+     annotated, matches = recognize_faces(current_frame, with_portraits, get_person_portrait)
+    st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), caption="Local face matches · verify uncertain results", use_container_width=True)
+    if not matches:
+     st.info("No face was detected in the current frame.")
+    else:
+     for match in matches:
+      label = match["name"] if match["recognized"] else "Unknown person"
+      st.write(f"{label} · match distance {match['distance']} (lower is closer)")
+  except Exception as face_exc:
+   st.error(f"Face recognition could not run: {type(face_exc).__name__}: {face_exc}")
+
 a,b=st.columns([1,1.2],gap="large")
 with a:
  st.markdown('<div class="panel"><div class="kicker">04 / ANALYSIS STATUS</div>',unsafe_allow_html=True)
@@ -71,7 +165,14 @@ with b:
 if analyze:
  try:
   with st.session_state.cam_state.lock: frame=st.session_state.cam_state.frame.copy() if st.session_state.cam_state.frame is not None else None
-  if frame is None: st.error("No camera frame received yet. Start the camera, wait, then retry.")
+  if mode == "DEMO MODE":
+   face_count = len(detect_faces(frame)) if frame is not None else None
+   st.session_state.analysis = demo_observation(camera_available=frame is not None, detected_faces=face_count)
+   st.session_state.analysis_time = datetime.now().strftime("%H:%M:%S")
+   st.session_state.status = "DEMO SAMPLE · NO AI REQUEST SENT"
+   st.rerun()
+  elif frame is None:
+   st.error("No camera frame received yet. Start the camera, wait, then retry.")
   else:
    st.session_state.status="ANALYSING FRAME"
    with st.spinner("The vision model is analysing the current frame…"):
@@ -96,18 +197,28 @@ if send or voice_question:
     if frame is not None:
      ok,buf=cv2.imencode(".jpg",frame,[int(cv2.IMWRITE_JPEG_QUALITY),78])
      if ok: live=buf.tobytes()
-    memories=search_activity_for_voice(transcript,limit=8)
-    reply=answer_voice_query(transcript,latest_observation={"text":st.session_state.analysis,"timestamp":st.session_state.analysis_time,"mode":"auto_observe"},memories=memories,conversation_history=[{"question":x["q"],"reply":x["a"]} for x in st.session_state.chat[-4:]],live_image_bytes=live)
-   st.session_state.chat.append({"q":transcript,"a":reply}); st.session_state.chat=st.session_state.chat[-12:]; st.session_state.status="REPLY READY"
+    if mode == "DEMO MODE":
+     reply = demo_reply(transcript)
+    else:
+     memories=search_activity_for_voice(transcript,limit=8)
+     reply=answer_voice_query(transcript,latest_observation={"text":st.session_state.analysis,"timestamp":st.session_state.analysis_time,"mode":"auto_observe"},memories=memories,conversation_history=[{"question":x["q"],"reply":x["a"]} for x in st.session_state.chat[-4:]],live_image_bytes=live)
+   st.session_state.chat.append({"q":transcript,"a":reply}); st.session_state.chat=st.session_state.chat[-12:]; st.session_state.status="DEMO REPLY READY" if mode == "DEMO MODE" else "REPLY READY"
    st.session_state.last_transcript=transcript; st.session_state.speech_text=reply; st.session_state.speech_seq+=1
-   try: save_conversation_turn(transcript,reply,source="Simple Smriti",used_live_camera=live is not None)
-   except Exception: pass
+   if mode == "LIVE MODE":
+    try: save_conversation_turn(transcript,reply,source="Simple Smriti",used_live_camera=live is not None)
+    except Exception: pass
    st.rerun()
  except Exception as e: st.session_state.status="VOICE / ANSWER ERROR"; st.error(f"Could not complete the conversation: {type(e).__name__}: {e}")
 if st.session_state.chat:
  with st.expander("🔊 Speak latest reply"):
   st.components.v1.html(build_speech_html(st.session_state.chat[-1]["a"],language="en-IN",rate=.92,widget_label="▶ SPEAK REPLY",autoplay=False),height=100,scrolling=False)
 with st.expander("Service status / setup"):
+ if st.session_state.get("smriti_db_init_error"):
+  st.write("Memory database:", st.session_state.smriti_db_init_error)
+ else:
+  st.write("Memory database: initialized")
  ready,msg=model_status(); st.write("AI service:",msg)
+ st.write("Selected mode:", mode)
+ st.write("Demo Mode does not call a cloud model. Live Mode uses the configured Hugging Face vision/voice services.")
  st.write("Voice uses browser speech recognition in a hands-free turn cycle after you press ACTIVATE LISTENING. The browser pauses while Smriti answers and resumes after speaking; typed questions remain available.")
  st.caption("Configure HF_TOKEN in Streamlit Secrets or environment variables. Never commit API keys. Camera access requires browser permission and HTTPS.")
