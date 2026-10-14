@@ -91,3 +91,27 @@ def test_manual_analysis_can_bypass_periodic_interval():
     assert state.take_analysis_sample(60, force=True) is None
     state.finish_analysis(observation={"text": "manual result"})
 
+def test_one_second_analysis_interval_is_supported(monkeypatch):
+    clock = {"now": 100.0}
+    monkeypatch.setattr("core.cloud_live.time.monotonic", lambda: clock["now"])
+
+    state = LiveMonitorState()
+    frame, encoded, metrics = process_live_frame(_test_frame())
+    state.update_frame(frame, encoded, metrics)
+
+    # Initial sample is available immediately.
+    assert state.take_analysis_sample(1) == encoded
+    state.finish_analysis(observation={"text": "first result"})
+
+    # Less than one second between request starts must not submit another sample.
+    clock["now"] = 100.5
+    assert state.take_analysis_sample(1) is None
+
+    # At one second, a new request can start.
+    clock["now"] = 101.0
+    assert state.take_analysis_sample(1) == encoded
+
+    # No overlapping requests, even when a manual request forces a sample.
+    assert state.take_analysis_sample(1, force=True) is None
+    state.finish_analysis(observation={"text": "second result"})
+
