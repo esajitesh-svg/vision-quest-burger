@@ -52,7 +52,7 @@ def process_live_frame(frame_bgr: np.ndarray, max_side: int = MAX_FRAME_EDGE, en
         l_channel = clahe.apply(l_channel)
         frame = cv2.cvtColor(cv2.merge((l_channel, a_channel, b_channel)), cv2.COLOR_LAB2BGR)
 
-    ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 94])
     if not ok:
         raise RuntimeError("OpenCV could not encode this camera frame.")
     height, width = frame.shape[:2]
@@ -64,6 +64,7 @@ def process_live_frame(frame_bgr: np.ndarray, max_side: int = MAX_FRAME_EDGE, en
         "brightness_label": "dark" if brightness < 55 else ("bright" if brightness > 205 else "normal"),
         "sharpness_label": "possibly soft/blurry" if sharpness < 45 else "reasonable edge detail",
         "jpeg_bytes": int(encoded.nbytes),
+        "jpeg_quality": 94,
     }
     return frame, encoded.tobytes(), metrics
 
