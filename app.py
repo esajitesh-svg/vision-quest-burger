@@ -34,7 +34,7 @@ from core.cloud_cv import process_image_opencv
 from core.cloud_live import LiveMonitorState, process_live_frame, draw_detection_overlay
 from core.voice import SUPPORTED_LANGUAGES, build_speech_html
 from core.cloud_voice import transcribe_audio, answer_voice_query
-from core.live_voice import LiveVoiceAssistantState, pcm16_to_wav
+from core.live_voice import LiveVoiceAssistantState, pcm16_to_wav, should_narrate_observation
 
 ROOT = Path(__file__).resolve().parent
 
@@ -907,21 +907,26 @@ with vision_tab:
                     )
                     st.session_state["live_jarvis_speech_kind"] = "reply"
                     st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
-                    if observation_sequence:
-                        st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
+                    # Leave newer camera observations queued; the reply takes priority
+                    # now, and any pending narration may speak after the cooldown.
                 elif (
                     live_voice_enabled
                     and live_voice_narrate_scenes
                     and latest_observation
-                    and observation_sequence > previous_observation_sequence
+                    and should_narrate_observation(
+                        observation_sequence=observation_sequence,
+                        seen_sequence=previous_observation_sequence,
+                        assistant_processing=bool(voice_snapshot["processing"]),
+                        last_spoken_at=float(st.session_state.get("live_jarvis_last_spoken_at", 0.0)),
+                        now=time.monotonic(),
+                    )
                 ):
-                    st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
-                    last_spoken_at = float(st.session_state.get("live_jarvis_last_spoken_at", 0.0))
-                    # User-directed answers have priority; do not repeatedly interrupt the
-                    # current narration with another scene summary.
-                    narration_cooldown = time.monotonic() - last_spoken_at < 8.0
-                    if not voice_snapshot["processing"] and not narration_cooldown:
-                        narration_text = latest_observation.get("text", "")
+                    narration_text = str(latest_observation.get("text", "")).strip()
+                    if not narration_text:
+                        # Empty observations have nothing useful to speak; consume them
+                        # to avoid retrying the same empty result on each UI refresh.
+                        st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
+                    else:
                         try:
                             speech_language = st.session_state.get("voice_language", "en-IN")
                             speech_rate = float(st.session_state.get("voice_rate", 0.92))
@@ -934,8 +939,10 @@ with vision_tab:
                             )
                             st.session_state["live_jarvis_speech_kind"] = "camera narration"
                             st.session_state["live_jarvis_last_spoken_at"] = time.monotonic()
+                            # Consume the observation only after the speech is prepared.
+                            st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
                         except ValueError:
-                            pass
+                            st.session_state["live_jarvis_seen_observation_sequence"] = observation_sequence
 
                 if not is_playing:
                     st.info("Live monitor is idle. Click START in the camera player above and allow browser camera permission.")
