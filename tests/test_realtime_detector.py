@@ -64,7 +64,7 @@ def test_detector_runs_real_forward_pass_for_each_call_and_returns_current_frame
     assert first.detections[0]["score"] == pytest.approx(0.855, abs=0.002)
     assert first.detections[0]["box"] == {"xmin": 64, "ymin": 24, "xmax": 96, "ymax": 56}
     assert len(COCO_CLASSES) == 80
-    assert "OpenCV DNN CPU" in REALTIME_DETECTOR_LABEL
+    assert "OpenCV DNN auto OpenCL/CPU" in REALTIME_DETECTOR_LABEL
 
 
 def test_detector_threshold_filters_low_confidence_objects():
