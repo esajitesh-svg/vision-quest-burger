@@ -92,7 +92,7 @@ def build_live_report(
             for index, item in enumerate(detections, start=1):
                 label = str(item.get("label", "object"))
                 try:
-                    confidence = max(0.0, min(1.0, float(item.get("score", 0.0)))
+                    confidence = max(0.0, min(1.0, float(item.get("score", 0.0))))
                 except (TypeError, ValueError, OverflowError):
                     confidence = 0.0
                 box = item.get("box") if isinstance(item.get("box"), dict) else {}
