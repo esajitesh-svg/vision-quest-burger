@@ -403,8 +403,9 @@ with vision_tab:
             live_voice_enabled = st.checkbox(
                 "Enable LIVE JARVIS voice (microphone streams until STOP)",
                 value=False,
+                disabled=not status[0],
                 key="live_jarvis_voice_enabled",
-                help="Turn this on, then STOP and START the camera again so the browser asks for microphone permission. Audio is sent to the cloud only while this live session is running.",
+                help="Requires the hosted voice/vision provider configuration. Turn this on, then STOP and START the camera again so the browser asks for microphone permission. Audio is sent to the cloud only while this live session is running.",
             )
             live_voice_narrate_scenes = st.checkbox(
                 "Speak fresh camera descriptions aloud",
@@ -824,9 +825,16 @@ with vision_tab:
                 ):
                     sample = live_state.take_analysis_sample(live_interval, max_side=live_max_side)
                     if sample is not None:
+                        # Keep narrated updates brief so the spoken companion does not
+                        # begin a long description just as a newer scene arrives.
+                        analysis_mode = (
+                            "accessibility"
+                            if live_voice_enabled and live_voice_narrate_scenes
+                            else live_mode
+                        )
                         Thread(
                             target=run_live_vision_worker,
-                            args=(live_state, sample, live_mode, live_question, live_max_side),
+                            args=(live_state, sample, analysis_mode, live_question, live_max_side),
                             daemon=True,
                         ).start()
 
