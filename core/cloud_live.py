@@ -405,6 +405,30 @@ class LiveMonitorState:
                     pass
         self.video_size = None
 
+    def get_latest_analysis_jpeg(self, max_side: int = 512) -> bytes | None:
+        """Encode a fresh clean camera frame without reserving the scene-analysis lock."""
+        with self.lock:
+            source = self.latest_analysis_frame_bgr
+            if source is None:
+                source = self.latest_frame
+            if source is None:
+                return None
+            frame = source.copy()
+
+        max_side = max(64, min(int(max_side), MAX_FRAME_EDGE))
+        height, width = frame.shape[:2]
+        scale = min(1.0, max_side / float(max(width, height)))
+        if scale < 1.0:
+            frame = cv2.resize(
+                frame,
+                (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+                interpolation=cv2.INTER_AREA,
+            )
+        ok, encoded = cv2.imencode(
+            ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82]
+        )
+        return encoded.tobytes() if ok else None
+
     def take_analysis_sample(
         self,
         interval_seconds: int,
