@@ -22,7 +22,7 @@ MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 REQUEST_TIMEOUT = (10, 90)
 
 MODES: dict[str, str] = {
-    "auto_observe": "Perform an automatic visual scan. In concise bullet points report: (1) overall scene and setting, (2) clearly visible everyday objects and their approximate positions (left/center/right and foreground/background), (3) visible actions or activities without guessing a person's identity or intention, and (4) readable text if any. Prioritize useful details and uncertainty. Do not claim to detect everything; mention only evidence actually visible in this frame.",
+    "auto_observe": "Perform a detailed but grounded visual inventory. Organize the answer under these headings: SCENE, VISIBLE OBJECTS AND POSITIONS, ACTIONS, READABLE TEXT, and UNCERTAINTIES. Mention each clearly visible and relevant object category, approximate position (upper/lower/left/center/right and foreground/background when clear), and visible color, shape, or state only when supported. Report observable actions without guessing identity, intentions, or relationships. Copy only readable text and mark uncertain parts as unclear. Mention potentially important ambiguous or partly hidden items and what prevents certainty. Include as many useful visible details as the frame reasonably supports, but never claim you detected everything or invent things outside the frame.",
     "scene": "Describe the visible scene in 2–4 concise sentences. Mention only clearly visible objects, actions, and setting.",
     "objects": "List clearly visible objects and say where each appears in the frame (left, center, right, foreground, or background). Do not invent unseen objects.",
     "read_text": "Transcribe only text that is visibly readable in the image. Preserve wording. Mark uncertain text as [unclear]. Do not invent missing words.",
@@ -140,7 +140,7 @@ def analyze_image(
     payload = {
         "model": MODEL_ID,
         "stream": False,
-        "max_tokens": 160,
+        "max_tokens": 320,
         "messages": [{
             "role": "user",
             "content": [
