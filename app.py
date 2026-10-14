@@ -597,6 +597,7 @@ with vision_tab:
         def on_live_audio_frame(frame):
             """Continuously receive mic frames, detect speech pauses, and queue short turns."""
             try:
+                live_voice_state.note_audio_frame()
                 if audio_resampler is not None:
                     for resampled in audio_resampler.resample(frame):
                         samples = resampled.to_ndarray().reshape(-1).astype(np.int16, copy=False)
@@ -902,8 +903,17 @@ with vision_tab:
                     st.info("Waiting for the first camera frame…")
 
                 if live_voice_enabled:
-                    if is_playing:
-                        st.success("🎙️ LIVE JARVIS MICROPHONE ACTIVE · speak naturally, then pause briefly for a reply")
+                    audio_age = voice_snapshot.get("audio_age_seconds")
+                    audio_recent = (
+                        isinstance(audio_age, (int, float)) and audio_age <= 3.0
+                    )
+                    if is_playing and audio_recent:
+                        st.success("🎙️ LIVE JARVIS MICROPHONE CONNECTED · speak naturally, then pause briefly for a reply")
+                    elif is_playing:
+                        st.warning(
+                            "Camera is running, but no recent microphone frames reached the server. "
+                            "Check browser microphone permission, then STOP and START the camera again."
+                        )
                     else:
                         st.warning("LIVE JARVIS is enabled in settings. STOP/START the camera and approve microphone permission.")
                     st.caption(f"Voice status: {voice_snapshot['status']}")
