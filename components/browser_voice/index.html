@@ -64,7 +64,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
   }
 
   function scheduleRestart(delay = 220) {
-    if (!desiredListening || speaking || !args.enabled) return;
+    if (!desiredListening || speaking || !args.enabled || args.busy) return;
     clearTimeout(startTimer);
     startTimer = setTimeout(startRecognition, delay);
   }
@@ -120,9 +120,13 @@ button:disabled{opacity:.38;cursor:not-allowed}
     };
     rec.onend = () => {
       recognitionRunning = false;
-      if (desiredListening && !speaking && args.enabled) {
+      if (desiredListening && !speaking && args.enabled && !args.busy) {
         scheduleRestart(260);
+      } else if (desiredListening && args.busy) {
+        setStatus("Smriti is thinking — listening will resume after the reply.", true);
       } else if (!desiredListening) {
+        startButton.disabled = !args.enabled;
+        startButton.textContent = "🎙 ACTIVATE LISTENING";
         setStatus("Voice link stopped.");
       }
     };
@@ -130,7 +134,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
   }
 
   function startRecognition() {
-    if (!desiredListening || speaking || !args.enabled || recognitionRunning) return;
+    if (!desiredListening || speaking || !args.enabled || args.busy || recognitionRunning) return;
     if (!recognition) recognition = createRecognition();
     if (!recognition) return;
     try {
@@ -222,6 +226,10 @@ button:disabled{opacity:.38;cursor:not-allowed}
     startButton.textContent = desiredListening ? "● LISTENING" : "🎙 ACTIVATE LISTENING";
     stopButton.disabled = !desiredListening && !speaking;
     if (!args.enabled && desiredListening) stopListening();
+    if (args.busy && desiredListening && !speaking && recognition && recognitionRunning) {
+      setStatus("Smriti is thinking — pausing the mic to avoid capturing unrelated speech.", true);
+      try { recognition.stop(); } catch (_) {}
+    }
     if (!initialized) {
       initialized = true;
       lastSpeechSequence = Number(args.speech_sequence || 0);
