@@ -211,7 +211,10 @@ def answer_live_transcript(voice_state, live_state, transcript: str) -> None:
         relevant_memories = search_activity_for_voice(transcript, limit=10)
     except Exception:
         # Storage outages should not prevent a live answer from being generated.
-        relevant_memories = search_memories_for_voice(transcript, limit=8)
+        try:
+            relevant_memories = search_memories_for_voice(transcript, limit=8)
+        except Exception:
+            relevant_memories = []
 
     history = voice_state.history_snapshot()
     if not history:
@@ -397,7 +400,16 @@ def password_gate() -> bool:
 if not password_gate():
     st.stop()
 
-init_db()
+try:
+    init_db()
+except Exception as exc:
+    st.error(
+        "The memory database could not be opened (" + type(exc).__name__ + "). "
+        "Check that DATABASE_URL is correct and the managed PostgreSQL service is reachable. "
+        "The app has not silently switched to another database."
+    )
+    st.stop()
+
 if "live_monitor_state" not in st.session_state:
     st.session_state["live_monitor_state"] = LiveMonitorState()
 live_state: LiveMonitorState = st.session_state["live_monitor_state"]
@@ -1356,6 +1368,19 @@ with vision_tab:
                         "source_hash": hashlib.sha256(image_bytes).hexdigest(),
                         "opencv_enabled": bool(use_opencv), "opencv_metrics": cv_metrics,
                     }
+                    try:
+                        save_observation(
+                            result.text,
+                            source="Image Lab",
+                            model=result.model,
+                            observed_at=st.session_state["latest_result"]["timestamp"],
+                            frame_hash=st.session_state["latest_result"]["source_hash"],
+                        )
+                    except Exception as storage_exc:
+                        st.warning(
+                            "Image analyzed successfully, but its text summary could not be added to Activity Log: "
+                            + f"{type(storage_exc).__name__}: {storage_exc}"
+                        )
                     st.success(f"Analysis completed in {result.elapsed_seconds:.1f} seconds · {result.model}")
                 except Exception as exc:
                     st.error(f"Vision analysis failed: {exc}")
@@ -1512,7 +1537,7 @@ with memory_tab:
 with voice_tab:
     st.subheader("JARVIS-STYLE VOICE COMPANION")
     st.write("Talk in turns: ask a question, get a reply spoken in the same browser voice this website already uses, then record your next question. Recent conversation turns are retained during this browser session so follow-up questions can make sense.")
-    st.warning("This is turn-based recording, not an always-open microphone. When you finish a recording, that audio clip is sent to Hugging Face for transcription; your question and relevant context go to the hosted model. Audio and transcripts are not automatically stored as memory.")
+    st.warning("This is a record-then-reply fallback, not the live microphone experience. The audio clip is sent to Hugging Face for transcription; the resulting text and reply are saved to the Activity Log when storage is available. Raw audio is not saved by this feature.")
     voice_language_col, voice_rate_col = st.columns([1, 1])
     with voice_language_col:
         st.selectbox(
