@@ -141,6 +141,12 @@ class CamState:
   self.lock=threading.Lock()
   self.frame=None
   self.updated_at=0.0
+  self.video_writer=None
+  self.video_path=None
+  self.video_started=0.0
+  self.video_frames=0
+  self.video_tags={}
+  self.video_notice=""
 class Processor:
  def __init__(self, state):
   # Receive the per-session state explicitly. WebRTC callbacks execute on a
@@ -148,10 +154,128 @@ class Processor:
   self.state = state
  def recv(self, frame):
   arr = frame.to_ndarray(format="bgr24")
+  now = time.monotonic()
   with self.state.lock:
    self.state.frame = arr.copy()
-   self.state.updated_at = time.monotonic()
+   self.state.updated_at = now
+   writer = self.state.video_writer
+   if writer is not None:
+    try:
+     if now - self.state.video_started >= 60:
+      writer.release()
+      self.state.video_writer = None
+      self.state.video_notice = "60-second recording limit reached. Press SAVE MP4 to archive the clip."
+     else:
+      small = cv2.resize(arr, (640, 360), interpolation=cv2.INTER_AREA)
+      writer.write(small)
+      self.state.video_frames += 1
+    except Exception as record_exc:
+     try:
+      writer.release()
+     except Exception:
+      pass
+     self.state.video_writer = None
+     self.state.video_notice = f"Video writer error: {type(record_exc).__name__}: {record_exc}"
   return av.VideoFrame.from_ndarray(arr, format="bgr24")
+
+def start_local_video_capture(state, tags):
+ """Begin a clearly user-started, max-60-second local MP4 recording."""
+ with state.lock:
+  if state.video_path is not None:
+   raise RuntimeError("Save or discard the previous clip before starting another recording.")
+  frame = state.frame.copy() if state.frame is not None else None
+  frame_age = time.monotonic() - state.updated_at if state.updated_at else 9999.0
+ if frame is None or frame_age > 5.0:
+  raise RuntimeError("No fresh camera frame is available. Start the camera and wait a moment.")
+ folder = get_archive_dir() / "video"
+ folder.mkdir(parents=True, exist_ok=True)
+ pending_path = folder / (".pending_" + uuid.uuid4().hex + ".mp4")
+ writer = cv2.VideoWriter(
+  str(pending_path), cv2.VideoWriter_fourcc(*"mp4v"), 15.0, (640, 360)
+ )
+ if not writer.isOpened():
+  writer.release()
+  pending_path.unlink(missing_ok=True)
+  raise RuntimeError("OpenCV could not initialise an MP4 writer on this computer.")
+ with state.lock:
+  state.video_path = pending_path
+  state.video_writer = writer
+  state.video_started = time.monotonic()
+  state.video_frames = 0
+  state.video_tags = dict(tags or {})
+  state.video_notice = "Recording is active. Stop and save within 60 seconds."
+
+def finalize_local_video_capture(state):
+ """Stop recording and commit a completed clip into the tagged local archive."""
+ with state.lock:
+  writer = state.video_writer
+  state.video_writer = None
+  pending_path = state.video_path
+  tags = dict(state.video_tags)
+  frame_count = int(state.video_frames)
+  started = float(state.video_started)
+  notice = state.video_notice
+  if writer is not None:
+   writer.release()
+  state.video_path = None
+  state.video_frames = 0
+  state.video_started = 0.0
+  state.video_tags = {}
+  state.video_notice = ""
+ if pending_path is None or not pending_path.is_file():
+  raise RuntimeError(notice or "No completed video clip is available to save.")
+ try:
+  data = pending_path.read_bytes()
+  if not data or frame_count < 1:
+   raise RuntimeError("The clip contains no usable frames; start recording after the camera feed appears.")
+  duration = max(0.0, time.monotonic() - started) if started else frame_count / 15.0
+  archive_path = save_media(
+   "video", data, "mp4", "video/mp4", tags,
+   {"frames": frame_count, "duration_seconds": min(60.0, duration), "captured_width": 640, "captured_height": 360},
+  )
+  archive_event("video_recording", {
+   "file": str(archive_path), "frames": frame_count,
+   "duration_seconds": round(min(60.0, duration), 2),
+  }, tags)
+  state.video_notice = f"Saved video clip: {archive_path}"
+  return archive_path
+ finally:
+  pending_path.unlink(missing_ok=True)
+
+@st.fragment(run_every=1)
+def render_video_archive_controls():
+ with st.expander("LIVE VIDEO ARCHIVE · USER-CONTROLLED RECORDING", expanded=False):
+  st.caption("Recording is never started automatically. Press START to capture a clip; it stops at 60 seconds. Clips are saved on this computer in the configured archive folder.")
+  state = st.session_state.cam_state
+  with state.lock:
+   active = state.video_writer is not None
+   has_pending = state.video_path is not None
+   frame_age = time.monotonic() - state.updated_at if state.updated_at else 9999.0
+   duration = min(60.0, time.monotonic() - state.video_started) if active else 0.0
+   frames = state.video_frames
+   notice = state.video_notice
+  if not active and not has_pending:
+   if st.button("START VIDEO RECORDING · MAX 60 SECONDS", use_container_width=True, key="start_local_video_recording", disabled=frame_age > 5.0):
+    try:
+     start_local_video_capture(state, current_archive_tags())
+     archive_event("video_recording_started", {"limit_seconds": 60}, current_archive_tags())
+     st.success("Video recording started.")
+    except Exception as exc:
+     st.error(f"Could not start video recording: {type(exc).__name__}: {exc}")
+  elif active:
+   st.error(f"● RECORDING VIDEO · {duration:.1f}/60 seconds · {frames} frames")
+   st.progress(min(1.0, duration / 60.0))
+  if has_pending:
+   if st.button("STOP & SAVE MP4 TO ARCHIVE", use_container_width=True, key="save_local_video_recording"):
+    try:
+     saved_path = finalize_local_video_capture(state)
+     st.success(f"Video saved: {saved_path}")
+    except Exception as exc:
+     st.error(f"Could not save video: {type(exc).__name__}: {exc}")
+   if notice:
+    st.caption(notice)
+  elif notice:
+   st.caption(notice)
 defaults={
  "cam_state":CamState(),
  "analysis":"No scene analysis yet. Start the camera and observe a frame.",
@@ -306,6 +430,7 @@ with r:
  st.markdown('</div>',unsafe_allow_html=True)
 
  render_live_analyser()
+ render_video_archive_controls()
 
 @st.fragment(run_every=1)
 def render_live_observer():
