@@ -632,9 +632,21 @@ with vision_tab:
                     layout=frame.layout.name,
                 )
                 muted_frame.sample_rate = frame.sample_rate
+                muted_frame.pts = frame.pts
+                muted_frame.time_base = frame.time_base
                 return muted_frame
             except Exception:
-                return frame
+                # Last-resort muting preserves the original frame's audio format.
+                # Never intentionally pass the captured microphone audio back out.
+                try:
+                    for plane in frame.planes:
+                        plane.update(bytes(plane.buffer_size))
+                    return frame
+                except Exception as mute_error:
+                    live_voice_state.fail_turn(
+                        f"Could not safely mute the outgoing microphone track: {type(mute_error).__name__}: {mute_error}"
+                    )
+                    return frame
 
         def on_live_media_ended():
             live_state.close()
@@ -858,21 +870,6 @@ with vision_tab:
                 current_status = live_state.get_status()
                 live_voice_state.set_streaming(bool(is_playing and live_voice_enabled))
                 voice_snapshot = live_voice_state.snapshot()
-
-                # Use one stable speech-player payload. It is replaced only when a new
-                # spoken reply/narration arrives, not every one-second status refresh.
-                previous_reply_sequence = int(
-                    st.session_state.get("live_jarvis_seen_reply_sequence", 0)
-                )
-                reply_is_new = voice_snapshot["reply_sequence"] > previous_reply_sequence
-                latest_observation = current_status.get("latest_observation")
-                previous_observation_sequence = int(
-                    st.session_state.get("live_jarvis_seen_observation_sequence", 0)
-                )
-                observation_sequence = (
-                    int(latest_observation.get("sequence", 0))
-                    if latest_observation else 0
-                )
 
                 # Keep the player HTML stable across the one-second fragment refreshes.
                 # It is rebuilt only when a new reply/narration arrives; the browser iframe
