@@ -46,7 +46,7 @@ def test_face_image_decoder_rejects_bad_data():
         raise AssertionError("Invalid image data should be rejected")
 
 
-from core.local_granite import clean_granite_reply
+from core.local_granite import clean_granite_reply, prepare_ollama_image
 
 
 def test_granite_reply_cleaner_hides_reasoning_trace():
@@ -62,3 +62,24 @@ def test_granite_reply_cleaner_removes_think_tag():
 
 def test_granite_reply_cleaner_keeps_normal_short_reply():
     assert clean_granite_reply("Hello, I'm ready to help.") == "Hello, I'm ready to help."
+
+
+
+def test_granite_observer_image_prep_respects_detail_bound():
+    source = BytesIO()
+    Image.new("RGB", (1280, 720), color=(80, 140, 180)).save(source, format="PNG")
+
+    prepared = prepare_ollama_image(source.getvalue(), max_side=640, quality=84)
+
+    with Image.open(BytesIO(prepared)) as result:
+        assert result.format == "JPEG"
+        assert result.size == (640, 360)
+
+
+def test_granite_observer_image_prep_rejects_empty_image():
+    try:
+        prepare_ollama_image(b"", max_side=640)
+    except ValueError as exc:
+        assert "No camera image" in str(exc)
+    else:
+        raise AssertionError("Empty image bytes should be rejected")
