@@ -217,14 +217,24 @@ def answer_live_transcript(voice_state, live_state, transcript: str) -> None:
             relevant_memories = []
 
     history = voice_state.history_snapshot()
-    if not history:
+    if len(history) < 4:
         try:
-            history = [
+            saved_history = [
                 {"question": str(row.get("user_text", "")), "reply": str(row.get("assistant_text", ""))}
                 for row in reversed(list_conversation_turns(limit=4))
             ]
+            # Older persisted turns fill gaps after a browser/app session reset.
+            combined = saved_history + history
+            deduplicated = []
+            seen_turns = set()
+            for turn in combined:
+                marker = (turn["question"], turn["reply"])
+                if marker not in seen_turns:
+                    deduplicated.append(turn)
+                    seen_turns.add(marker)
+            history = deduplicated[-4:]
         except Exception:
-            history = []
+            pass
 
     reply = answer_voice_query(
         transcript,
