@@ -80,6 +80,7 @@ def answer_voice_query(
     question: str,
     latest_observation: dict[str, Any] | None = None,
     memories: list[dict[str, Any]] | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> str:
     """Answer a spoken question using only bounded live-observation and memory context."""
     question = (question or "").strip()
@@ -107,9 +108,16 @@ def answer_voice_query(
             "saved_at": str(item.get("created_at", ""))[:80],
             "note": str(item.get("note", ""))[:600],
         })
+    recent_turns = []
+    for turn in (conversation_history or [])[-4:]:
+        user_text = str(turn.get("question", "")).strip()[:500]
+        assistant_text = str(turn.get("reply", "")).strip()[:700]
+        if user_text and assistant_text:
+            recent_turns.append({"user": user_text, "assistant": assistant_text})
     context = {
         "latest_visual_observation": observation_context,
         "recent_saved_memory_notes": memory_context,
+        "recent_conversation_turns": recent_turns,
     }
     messages = [
         {
