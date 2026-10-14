@@ -12,6 +12,7 @@ body{margin:0;background:transparent;color:#c5d9e3}
 button{border:1px solid #287181;border-radius:4px;padding:10px 14px;min-height:39px;font-weight:800;letter-spacing:.04em;cursor:pointer}
 #start{background:#00cfe8;color:#031015}
 #stop{background:#0b1b25;color:#c5d9e3}
+#test,#replay{background:#09212a;color:#70ecff}
 button:disabled{opacity:.38;cursor:not-allowed}
 #status{font:12px/1.5 system-ui;color:#79bdc9;flex:1;min-width:170px}
 #heard{font-size:12px;line-height:1.5;color:#a8c5d3;margin-top:7px;min-height:17px;overflow-wrap:anywhere}
@@ -25,6 +26,8 @@ button:disabled{opacity:.38;cursor:not-allowed}
   <div class="kicker">SMRITI // LIVE VOICE LINK</div>
   <div class="row">
     <button id="start" type="button">🎙 ACTIVATE LISTENING</button>
+    <button id="test" type="button">🔊 TEST VOICE</button>
+    <button id="replay" type="button" disabled>↻ REPLAY LAST</button>
     <button id="stop" type="button">■ STOP</button>
     <div id="status" role="status" aria-live="polite"><span id="pulse" class="pulse"></span>Voice link idle.</div>
   </div>
@@ -35,6 +38,8 @@ button:disabled{opacity:.38;cursor:not-allowed}
 (() => {
   const startButton = document.getElementById("start");
   const stopButton = document.getElementById("stop");
+  const testButton = document.getElementById("test");
+  const replayButton = document.getElementById("replay");
   const statusNode = document.getElementById("status");
   const pulseNode = document.getElementById("pulse");
   const heardNode = document.getElementById("heard");
@@ -53,6 +58,8 @@ button:disabled{opacity:.38;cursor:not-allowed}
   let lastSpeechSequence = 0;
   let lastResultIndex = 0;
   let startTimer = null;
+  let lastSpokenText = "";
+  let lastSpokenKind = "reply";
 
   function setStatus(message, live = false) {
     pulseNode.className = live ? "pulse live" : "pulse";
@@ -193,6 +200,9 @@ button:disabled{opacity:.38;cursor:not-allowed}
   }
 
   function speakUpdate(text, sequence, kind = "reply") {
+    lastSpokenText = String(text || "");
+    lastSpokenKind = String(kind || "reply");
+    replayButton.disabled = !lastSpokenText;
     if (userStopped || !text || !speech || typeof window.SpeechSynthesisUtterance === "undefined") return;
     const requestedKind = String(kind || "reply");
     // Never cancel an utterance just because another camera description arrived.
@@ -249,6 +259,49 @@ button:disabled{opacity:.38;cursor:not-allowed}
     }
   }
 
+  testButton.addEventListener("click", () => {
+    // Keep the browser's speech action within a direct click gesture so autoplay
+    // restrictions cannot silently prevent the first speech.
+    userStopped = false;
+    speechGeneration += 1;
+    speaking = false;
+    if (!speech || typeof window.SpeechSynthesisUtterance === "undefined") {
+      setStatus("Text-to-speech is unavailable in this browser. Try current Chrome or Edge.");
+      return;
+    }
+    try {
+      speech.cancel();
+      const test = new SpeechSynthesisUtterance("Smriti voice test. If you can hear this, speaker output is working.");
+      test.lang = args.language || "en-IN";
+      test.rate = Math.max(0.65, Math.min(1.25, Number(args.rate || 0.92)));
+      test.pitch = 1.0;
+      const voices = speech.getVoices();
+      const langRoot = test.lang.split("-")[0].toLowerCase();
+      const matched = voices.find(v => v.lang && v.lang.toLowerCase() === test.lang.toLowerCase())
+        || voices.find(v => v.lang && v.lang.toLowerCase().startsWith(langRoot));
+      if (matched) test.voice = matched;
+      test.onstart = () => setStatus("TEST VOICE IS SPEAKING. If silent, check device volume/output.");
+      test.onend = () => setStatus("Test finished. " + (desiredListening ? "Live listening remains enabled." : "Press ACTIVATE LISTENING to talk."));
+      test.onerror = event => setStatus("Text-to-speech error: " + String(event.error || "unknown") + ". Check browser audio settings.");
+      lastSpokenText = "Smriti voice test. If you can hear this, speaker output is working.";
+      lastSpokenKind = "test";
+      replayButton.disabled = false;
+      speech.speak(test);
+      setStatus("Sending test speech to the browser voice engine…");
+    } catch (error) {
+      setStatus("Could not start test speech: " + String(error && error.message || error));
+    }
+  });
+
+  replayButton.addEventListener("click", () => {
+    if (!lastSpokenText) {
+      setStatus("No reply has arrived to replay yet.");
+      return;
+    }
+    userStopped = false;
+    speakUpdate(lastSpokenText, Date.now(), lastSpokenKind || "reply");
+  });
+
   startButton.addEventListener("click", startListening);
   stopButton.addEventListener("click", stopListening);
 
@@ -289,7 +342,18 @@ button:disabled{opacity:.38;cursor:not-allowed}
       }
     }
     if (args.last_transcript) heardNode.textContent = "Last heard: " + String(args.last_transcript).slice(0, 300);
-    window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: 110}, "*");
+    if (!speech || typeof window.SpeechSynthesisUtterance === "undefined") {
+      setStatus("No browser text-to-speech support detected. Use current Chrome or Edge.");
+      testButton.disabled = true;
+    }
+    if (!(window.SpeechRecognition || window.webkitSpeechRecognition)) {
+      if (desiredListening) {
+        desiredListening = false;
+        startButton.disabled = !args.enabled;
+        setStatus("Speech recognition unsupported. TEST VOICE still works; use Chrome/Edge for listening.");
+      }
+    }
+    window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: 156}, "*");
   });
 
   window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1}, "*");
