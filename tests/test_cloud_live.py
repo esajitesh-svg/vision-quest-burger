@@ -24,7 +24,8 @@ def test_live_frame_can_skip_jpeg_encoding_for_camera_callback():
     )
     assert frame.shape[:2] == (720, 1280)
     assert encoded == b""
-    assert metrics["jpeg_bytes"] == 0
+    assert "jpeg_bytes" not in metrics
+    assert "brightness" in metrics and "sharpness" in metrics
 
 
 def test_scene_analysis_encodes_a_lazy_resized_frame_only_when_requested():
@@ -43,6 +44,17 @@ def test_scene_analysis_encodes_a_lazy_resized_frame_only_when_requested():
     assert decoded.shape[:2] == (180, 320)
     assert state.get_status()["analysis_busy"] is True
     state.finish_analysis(observation={"text": "sampled"})
+
+
+def test_live_frame_can_skip_expensive_diagnostics():
+    frame, encoded, metrics = process_live_frame(
+        _test_frame(640, 360), encode_jpeg=False, compute_metrics=False
+    )
+    assert frame.shape[:2] == (360, 640)
+    assert encoded == b""
+    assert "brightness" not in metrics
+    assert "sharpness" not in metrics
+    assert "jpeg_bytes" not in metrics
 
 
 def test_live_frame_processing_resizes_and_returns_jpeg():
