@@ -292,30 +292,7 @@ div[data-testid="stMetric"] { box-shadow:inset 0 0 18px rgba(0,220,240,.025); }
 """
 st.markdown(CSS, unsafe_allow_html=True)
 
-# One-time cinematic boot splash per browser session.
-if not st.session_state.get("vq_intro_shown", False):
-    import time as _intro_time
-    splash = st.empty()
-    splash.markdown(
-        """
-        <div class="vq-splash">
-          <div class="vq-orbit"></div>
-          <div class="vq-splash-core">
-            <div class="vq-ring"></div><div class="vq-ring inner"></div>
-            <div style="font-size:2rem;line-height:1;margin-bottom:.4rem;">◉</div>
-            <div class="vq-splash-title">VISIONQUEST</div>
-            <div class="vq-splash-sub" style="margin-top:.45rem;">Visual memory system</div>
-          </div>
-          <div class="vq-splash-sub">Initializing perception interface</div>
-          <div class="vq-splash-line"></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    _intro_time.sleep(2.4)
-    splash.empty()
-    st.session_state["vq_intro_shown"] = True
-
+# Keep startup non-blocking: the live workspace should render immediately.
 
 def get_secret(name: str) -> str:
     value = os.getenv(name, "").strip()
