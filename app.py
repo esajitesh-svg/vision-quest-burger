@@ -357,16 +357,16 @@ with vision_tab:
         with st.expander("⚙️ PERCEPTION / CAMERA CONTROLS", expanded=False):
             live_auto_analyze = st.checkbox(
                 "Enable automatic scene explanation",
-                value=bool(status[0]),
+                value=False,
                 disabled=not status[0],
-                key="live_auto_observe_always",
-                help="A hosted vision-language model gives the written scene explanation from sampled color frames.",
+                key="live_auto_observe_smooth",
+                help="Off by default for the smoothest feed. Enable for periodic hosted scene descriptions, or use ANALYZE CURRENT FRAME NOW when needed.",
             )
             live_object_detection = st.checkbox(
-                "Enable continuous local object detection + bounding boxes",
-                value=True,
-                key="live_object_detection",
-                help="Local YOLOX inference runs asynchronously on recent frames at a limited cadence so it does not block the video stream.",
+                "Enable local object detection + bounding boxes",
+                value=False,
+                key="live_object_detection_smooth",
+                help="Off by default to prevent background CPU inference competing with video. Enable when you want object labels; scans run asynchronously on recent frames.",
             )
             camera_resolution_label = st.selectbox(
                 "Camera capture / processing resolution",
@@ -375,9 +375,9 @@ with vision_tab:
                     "HD · 1280 × 720",
                     "Standard · 640 × 360",
                 ],
-                index=1,
-                key="live_camera_resolution_latency",
-                help="Defaults to HD for a smoother cloud stream. Full HD is available, but uses more upload bandwidth and server CPU; the device/browser may negotiate a lower actual resolution.",
+                index=2,
+                key="live_camera_resolution_smooth",
+                help="Defaults to Standard 640×360 for the smoothest cloud stream. Switch to HD or Full HD when the feed is responsive and more detail is needed.",
             )
             if camera_resolution_label.startswith("Full HD"):
                 live_capture_width, live_capture_height, live_processing_max_side = 1920, 1080, 1920
@@ -495,17 +495,21 @@ with vision_tab:
                 frame_bgr = frame.to_ndarray(format="bgr24")
                 # Local detector inference is launched asynchronously on copied frames.
                 # The callback itself should only do the lightweight video pipeline.
+                # Run the more expensive brightness/focus metrics about once per
+                # second, not for each video frame.
+                update_diagnostics = (live_state.frame_count % 12 == 0)
                 processed_bgr, _unused_jpeg, metrics = process_live_frame(
                     frame_bgr,
                     max_side=live_processing_max_side,
                     enhance=live_enhance,
                     encode_jpeg=False,
+                    compute_metrics=update_diagnostics,
                 )
                 if live_object_detection and realtime_detector is not None:
                     # Reserve at most one inference task and skip new frames while it is
                     # busy. The expensive neural-network call runs on a daemon worker,
                     # never inside WebRTC's frame callback.
-                    if live_state.reserve_live_detection(interval_seconds=0.6):
+                    if live_state.reserve_live_detection(interval_seconds=1.2):
                         try:
                             Thread(
                                 target=run_local_detector_worker,
@@ -577,14 +581,17 @@ with vision_tab:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.42, (100, 255, 180), 1, cv2.LINE_AA,
                     )
 
-                # This JPEG is only for the optional UI snapshot. Keep it lightweight;
-                # the WebRTC video itself is returned as a raw video frame below.
-                ok, display_encoded = cv2.imencode(
-                    ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85]
-                )
-                display_jpeg = display_encoded.tobytes() if ok else b""
-                metrics["jpeg_bytes"] = len(display_jpeg)
-                metrics["jpeg_quality"] = 85
+                # The live WebRTC video is returned as a raw frame. Encode the
+                # optional still-preview snapshot only once per ~12 delivered frames.
+                display_jpeg = b""
+                if live_state.frame_count % 12 == 0:
+                    ok, display_encoded = cv2.imencode(
+                        ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+                    )
+                    if ok:
+                        display_jpeg = display_encoded.tobytes()
+                        metrics["jpeg_bytes"] = len(display_jpeg)
+                        metrics["jpeg_quality"] = 80
                 # Keep the clean color frame in memory; resize/encode it only when an
                 # AI observation is actually requested (rather than on every camera frame).
                 live_state.update_frame(
@@ -609,7 +616,7 @@ with vision_tab:
                     "video": {
                         "width": {"ideal": live_capture_width},
                         "height": {"ideal": live_capture_height},
-                        "frameRate": {"ideal": 12, "max": 15},
+                        "frameRate": {"ideal": 10, "max": 12},
                     },
                     "audio": False,
                 },
