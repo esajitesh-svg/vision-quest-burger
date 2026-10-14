@@ -449,7 +449,8 @@ def search_memories(query: str, limit: int = 100) -> list[dict]:
 _MEMORY_RECALL_CUES = re.compile(
     r"\b(?:remember|recall|forgot|forget|memories|memory|remind|reminder)\b"
     r"|\bwhere\s+(?:did|have)\s+i\s+(?:put|leave|left|keep|kept|place)\b"
-    r"|\bwhat\s+(?:did|have)\s+i\s+(?:say|do|save|put|leave|plan)\b",
+    r"|\bwhat\s+(?:did|have)\s+i\s+(?:see|look\s+at|hear|say|do|save|put|leave|plan|talk\s+about)\b"
+    r"|\b(?:earlier|before|previously|last\s+time|what\s+happened)\b",
     flags=re.IGNORECASE,
 )
 
