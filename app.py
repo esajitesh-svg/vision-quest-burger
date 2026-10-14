@@ -35,6 +35,7 @@ from core.cloud_live import LiveMonitorState, process_live_frame, draw_detection
 from core.voice import SUPPORTED_LANGUAGES, build_speech_html
 from core.cloud_voice import transcribe_audio, answer_voice_query
 from core.live_voice import LiveVoiceAssistantState, pcm16_to_wav, should_narrate_observation
+from core.demo_mode import render_demo_hub
 
 ROOT = Path(__file__).resolve().parent
 
@@ -408,6 +409,18 @@ def password_gate() -> bool:
 
 
 if not password_gate():
+    st.stop()
+
+st.markdown("### Select experience")
+experience_mode = st.radio(
+    "Choose how Smriti runs",
+    ["Live Mode", "Demo Mode"],
+    horizontal=True,
+    key="experience_mode",
+    help="Demo Mode uses scripted sample replies without cloud AI requests. Face matching runs locally when the OpenCV contrib recognizer is installed.",
+)
+if experience_mode == "Demo Mode":
+    render_demo_hub()
     st.stop()
 
 try:
