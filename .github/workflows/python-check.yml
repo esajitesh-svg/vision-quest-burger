@@ -28,7 +28,7 @@ jobs:
         run: python -m compileall -q app.py core tests
 
       - name: Check runtime imports
-        run: python -c "import streamlit, streamlit_webrtc, av, cv2; import core.cloud_db, core.cloud_vision, core.cloud_detection, core.live_report, core.cloud_cv, core.cloud_live, core.voice; print('runtime imports passed')"
+        run: python -c "import streamlit, streamlit_webrtc, av, cv2; from streamlit_webrtc import VideoHTMLAttributes; import core.cloud_db, core.cloud_vision, core.cloud_detection, core.realtime_detector, core.live_report, core.cloud_cv, core.cloud_live, core.voice; print('runtime imports passed')"
 
       - name: Test live OpenCV processing, recording, and vision modes
         run: python -m pytest -q tests
