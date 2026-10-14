@@ -610,7 +610,7 @@ with vision_tab:
                     metric_cols[2].metric("Frame", f"{frame_metrics['width']} × {frame_metrics['height']}")
                     st.caption(f"Latest frame JPEG: {frame_metrics['jpeg_bytes']:,} bytes. Focus is a rough heuristic, not a guarantee of image quality.")
 
-                                st.markdown("<div class='cv-workbench-label'>03 / LIVE OBJECT DETECTION · CURRENT-FRAME RESULTS</div>", unsafe_allow_html=True)
+                st.markdown("<div class='cv-workbench-label'>03 / LIVE OBJECT DETECTION · CURRENT-FRAME RESULTS</div>", unsafe_allow_html=True)
                 detection_status = live_state.detection_snapshot()
                 current_detections = detection_status["detections"]
                 inference_ms = frame_metrics.get("detector_ms") if frame_metrics else None
