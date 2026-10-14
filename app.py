@@ -324,7 +324,7 @@ if status[0]:
 else:
     st.warning(status[1])
 st.caption(
-    "Privacy notice: the live stream is processed on the app host, and sampled/analyzed frames or uploaded photos are sent to the configured external vision inference provider. "
+    "Privacy notice: the camera stream is processed on the app host. Local object detection runs there using OpenCV DNN; sampled scene-explanation frames and uploaded images are sent to the configured external vision-language provider. "
     "The app does not intentionally save source photos, but the provider processes the image request. Use fictional test scenes and obtain consent; do not upload private medical or sensitive imagery."
 )
 
@@ -335,8 +335,8 @@ with vision_tab:
 
     with live_tab:
         st.markdown("<div class='cv-workbench-label'>01 / LIVE SENSOR INPUT · WEBCAM</div><div class='cv-feed-heading'>LIVE OPTICAL FEED // REAL-TIME CV PIPELINE</div>", unsafe_allow_html=True)
-        st.write("VisionQuest now runs two separate perception paths: OpenCV draws a live diagnostic canvas, while a hosted detector identifies common object categories and returns confidence-labelled bounding boxes. A vision-language model separately explains sampled scenes. The detector and scene model run asynchronously, so remote requests do not block the camera's frame-processing callback.")
-        st.warning("Live video is streamed to the app host. Frames sent for AI analysis are forwarded to an external inference provider. Recording is silent video only, limited to 60 seconds / 25 MB, and downloadable after stopping. Use consented fictional scenes only.")
+        st.write("VisionQuest runs local OpenCV DNN object detection on every frame delivered by the live camera stream, drawing current-frame boxes and confidence labels. A separate hosted vision-language model explains sampled scenes. Object inference runs on the app host, so detections do not depend on per-frame API calls; available frame rate depends on the server CPU.")
+        st.caption("Camera video is sent to the hosted app for processing. Object detection is local to the app server; only scene-explanation samples use the external vision-language provider. Silent recording is optional (up to 60 seconds / 25 MB). Use consented test scenes.")
         with st.expander("⚙️ PERCEPTION / CAMERA CONTROLS", expanded=False):
             live_auto_analyze = st.checkbox(
                 "Enable automatic scene explanation",
@@ -610,51 +610,54 @@ with vision_tab:
                     metric_cols[2].metric("Frame", f"{frame_metrics['width']} × {frame_metrics['height']}")
                     st.caption(f"Latest frame JPEG: {frame_metrics['jpeg_bytes']:,} bytes. Focus is a rough heuristic, not a guarantee of image quality.")
 
-                st.markdown("<div class='cv-workbench-label'>03 / OBJECT DETECTION · CLASS LABELS + CONFIDENCE</div>", unsafe_allow_html=True)
+                                st.markdown("<div class='cv-workbench-label'>03 / LIVE OBJECT DETECTION · CURRENT-FRAME RESULTS</div>", unsafe_allow_html=True)
                 detection_status = live_state.detection_snapshot()
+                current_detections = detection_status["detections"]
+                inference_ms = frame_metrics.get("detector_ms") if frame_metrics else None
+                inference_fps = frame_metrics.get("detector_fps") if frame_metrics else None
                 detector_cols = st.columns(3, gap="small")
-                detector_cols[0].metric("Objects detected", len(detection_status["detections"]))
+                detector_cols[0].metric("Objects in current frame", len(current_detections))
                 detector_cols[1].metric(
-                    "Detector",
-                    "SCANNING" if detection_status["busy"] else ("READY" if detection_status["age_seconds"] is not None else ("ENABLED" if live_object_detection else "PAUSED")),
+                    "Local detector",
+                    "LIVE / ON" if live_object_detection and realtime_detector is not None else ("OFF" if not live_object_detection else "UNAVAILABLE"),
                 )
                 detector_cols[2].metric(
-                    "Last scan",
-                    f"{detection_status['elapsed_seconds']:.1f}s" if detection_status["age_seconds"] is not None else "—",
-                    f"{detection_status['age_seconds']:.1f}s ago" if detection_status["age_seconds"] is not None else None,
+                    "Inference / frame",
+                    f"{inference_ms:.0f} ms" if isinstance(inference_ms, (int, float)) else "—",
+                    f"{inference_fps:.1f} detections/s" if isinstance(inference_fps, (int, float)) and inference_fps > 0 else None,
                 )
                 if detection_status["error"]:
-                    st.warning(f"Object detection notice: {detection_status['error']}")
+                    st.warning(f"Local object detector notice: {detection_status['error']}")
                 elif not live_object_detection:
-                    st.caption("Live object detection is paused. Enable it above to display object labels and bounding boxes.")
-                elif detection_status["busy"]:
-                    st.caption("The detector is classifying the latest sample frame. The camera feed continues independently.")
+                    st.caption("Continuous object detection is disabled. Open PERCEPTION / CAMERA CONTROLS to re-enable it.")
+                elif realtime_detector is None:
+                    st.error("The local YOLOX model is unavailable; no simulated boxes are shown. Check the model-download error above.")
                 elif detection_status["age_seconds"] is None:
-                    st.info("Waiting for the first object-detection result. Start the camera stream to begin.")
-                elif detection_status["detections"]:
+                    st.info("Waiting for a live camera frame. Click START in the camera player and allow camera access.")
+                elif current_detections:
                     st.dataframe(
                         [
                             {
                                 "OBJECT": item["label"],
                                 "CONFIDENCE": f"{item['score']:.0%}",
-                                "BOX (x1, y1, x2, y2)": (
-                                    f"{item['box']['xmin']}, {item['box']['ymin']}, "
+                                "POSITION / BOX": (
+                                    f"{item['box']['xmin']}, {item['box']['ymin']} → "
                                     f"{item['box']['xmax']}, {item['box']['ymax']}"
                                 ),
                             }
-                            for item in detection_status["detections"]
+                            for item in current_detections
                         ],
                         use_container_width=True,
                         hide_index=True,
                     )
                     st.caption(
-                        f"{detection_status['model']} · results refreshed asynchronously; "
-                        "confidence is a model score, not a guarantee of correctness."
+                        f"{detection_status['model']} · each result comes from local inference on the displayed frame. "
+                        "Confidence is a model score, not a guarantee of correctness."
                     )
                 else:
                     st.caption(
-                        "The latest scan found no objects above the confidence threshold. "
-                        "Try lowering the threshold or improving lighting/framing."
+                        "No object category passed the confidence threshold in the latest processed frame. "
+                        "This does not prove that the scene contains no objects."
                     )
 
                 if current_status["latest_analysis_error"]:
@@ -1075,7 +1078,7 @@ with settings_tab:
     st.write(f"**Vision engine:** {status_message}")
     st.write("**Model:** HuggingFaceTB/SmolVLM-256M-Instruct")
     st.write("**OpenCV:** Headless OpenCV processes each live frame and renders selectable diagnostic views with detection overlays.")
-    st.write(f"**Object detector:** {OBJECT_DETECTION_MODEL} via Hugging Face Inference Providers; returns category labels, confidence scores, and bounding boxes for sampled frames.")
+    st.write(f"**Object detector:** {REALTIME_DETECTOR_LABEL}. The ONNX model runs on the app host using OpenCV DNN for each frame delivered by WebRTC; object detection does not call an external inference API.")
     st.write("**Camera:** Browser still capture plus WebRTC live stream. OpenCV processes each incoming frame on the cloud host. The Live camera & recording tab supports periodic AI analysis and download of silent MP4 clips up to 60 seconds/25 MB; WebRTC depends on camera permissions and STUN/TURN network access.")
     st.write("**Voice:** Browser-native speech synthesis reads observations and manually selected memory notes aloud; no external TTS API key is required.")
     st.write("**Memory storage:** Shared SQLite demo database on the host. Its filesystem may reset on redeploy/restart; backups and durable production database setup are not included.")
