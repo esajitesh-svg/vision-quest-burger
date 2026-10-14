@@ -22,7 +22,17 @@ jobs:
           python-version: "3.12"
 
       - name: Install runtime and test dependencies
-        run: python -m pip install --upgrade pip pytest requests pillow numpy opencv-python-headless==4.14.0.94 "streamlit>=1.51,<2.0" streamlit-webrtc==0.70.1
+        run: python -m pip install --upgrade pip pytest requests pillow numpy opencv-python-headless==4.14.0.94 "streamlit>=1.51,<2.0" streamlit-webrtc==0.70.1 "psycopg[binary]>=3.2,<4"
+
+      - name: Validate browser voice component JavaScript
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          html = Path("components/browser_voice/index.html").read_text(encoding="utf-8")
+          script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+          Path("/tmp/smriti-browser-voice.js").write_text(script, encoding="utf-8")
+          PY
+          node --check /tmp/smriti-browser-voice.js
 
       - name: Compile all Python source
         run: python -m compileall -q app.py core tests
