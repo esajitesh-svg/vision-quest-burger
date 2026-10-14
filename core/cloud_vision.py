@@ -98,7 +98,7 @@ def build_prompt(mode: str, focus: str = "") -> str:
     )
     if focus.strip():
         prompt += "\n\nUser question/focus: " + focus.strip()[:300]
-    return prompt + "\n\nKeep the answer concise and directly about this image."
+    return prompt + "\n\nKeep the answer concise but detailed enough to cover all clearly visible evidence; do not pad the response. Stay directly focused on this image."
 
 
 def _extract_response_text(payload: dict[str, Any]) -> str:
