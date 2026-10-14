@@ -316,7 +316,7 @@ defaults={
  "last_transcript":"","speech_text":"","speech_seq":0,"status":"READY",
  "opencv_result_rgb":None,"opencv_metrics":{},"opencv_detections":[],
  "opencv_detection_last_run":0.0,"opencv_detection_error":"",
- "opencv_detection_elapsed":0.0,"opencv_frame_counter":0,
+ "opencv_detection_elapsed":0.0,"opencv_frame_counter":0,"opencv_detector_backend":"Not loaded",
  "observer_last_run_monotonic":0.0,
  "observer_state":ObserverState()
 }
@@ -379,6 +379,7 @@ def render_live_analyser():
        st.session_state.opencv_detections = result.detections
        st.session_state.opencv_detection_last_run = time.monotonic()
        st.session_state.opencv_detection_elapsed = result.elapsed_seconds
+       st.session_state.opencv_detector_backend = getattr(detector, "acceleration_backend", "OpenCV DNN CPU")
        if st.session_state.get("archive_auto_save", True):
         try:
          archive_event("object_detection", {
@@ -421,7 +422,7 @@ def render_live_analyser():
       st.error("Live object detector unavailable: " + st.session_state.opencv_detection_error)
       st.caption("Uncheck and recheck object detection to retry after correcting the issue.")
      else:
-      st.caption(f"Detector: {REALTIME_DETECTOR_LABEL} · last inference {st.session_state.opencv_detection_elapsed*1000:.0f} ms · detections refresh about every 2.5 seconds")
+      st.caption(f"Detector: {REALTIME_DETECTOR_LABEL} · backend: {st.session_state.opencv_detector_backend} · last inference {st.session_state.opencv_detection_elapsed*1000:.0f} ms · detections refresh about every 2.5 seconds")
       if active_detections:
        st.write("**Current object labels**")
        for item in active_detections:
