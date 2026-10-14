@@ -25,7 +25,7 @@ This branch adds a smaller single-screen UI in `simple_app.py`. Live AI uses the
 - Animated companion orb and a compact single-screen layout.
 - A global DEMO MODE / LIVE MODE selector. Demo Mode uses scripted replies and simulated scene text without making cloud AI requests; it is marked as sample content.
 - Live browser camera feed through WebRTC.
-- Button-triggered visual analysis using the configured vision model in Live Mode.
+- Live OpenCV analyser with selectable display operators, camera-quality metrics, and optional local YOLOX object detection; the Live Observer samples a frame every second and skips new requests while Granite is still analysing.
 - Consent-based local face enrollment using a chosen reference photo, plus comparison against current camera faces. Unmatched or uncertain faces are labelled Unknown.
 - Browser speech recognition after pressing **ACTIVATE LISTENING**, with typed questions as fallback.
 - Replies use current camera-frame context when available, recent saved activity memories, and recent conversation turns.
@@ -38,7 +38,7 @@ This branch adds a smaller single-screen UI in `simple_app.py`. Live AI uses the
 
 ## Important limits
 
-This is a simplified prototype, not a medical device or a guaranteed always-on background listener. The browser and local Ollama service must remain available, and camera/microphone permissions must be granted. Browser speech recognition support and network requirements vary by browser. Voice operates as quick turn-by-turn speech recognition → local Granite response → browser speech playback, rather than simultaneous streaming audio-to-audio. Camera feed and analysis are separate: analysis runs when requested. The Live Mode connection to `127.0.0.1:11434` works when Streamlit is running on the same PC; it will not reach a user's computer from a cloud-hosted web server. The analysis panel shows actual status and observations, not hidden private model reasoning.
+This is a simplified prototype, not a medical device or a guaranteed always-on background listener. The browser and local Ollama service must remain available, and camera/microphone permissions must be granted. Browser speech recognition support and network requirements vary by browser. Voice operates as quick turn-by-turn speech recognition → local Granite response → browser speech playback, rather than simultaneous streaming audio-to-audio. Live Observer checks for a frame every second, but the model may take longer; it skips samples while a request is active and displays the newest completed observation. The Live Mode connection to `127.0.0.1:11434` works when Streamlit is running on the same PC; it will not reach a user's computer from a cloud-hosted web server. The analysis panel shows actual status and observations, not hidden private model reasoning.
 
 Face comparison uses an experimental local OpenCV LBPH matcher, is sensitive to lighting and pose, and can misidentify or fail to match people; confirm identity rather than relying on it for consequential decisions. Reference portraits should only be registered with permission. Demo replies and sample observations are not real AI results and should never be treated as stored personal memories.
 
