@@ -1,6 +1,6 @@
 # Simple Smriti AI interface
 
-This branch adds a smaller single-screen UI in `simple_app.py`. It uses the existing VisionQuest voice, vision, and memory services.
+This branch adds a smaller single-screen UI in `simple_app.py`. Live AI uses the local Ollama Granite vision model; browser speech recognition captures spoken turns and browser speech synthesis reads replies aloud.
 
 ## Run on Windows
 
@@ -11,7 +11,12 @@ This branch adds a smaller single-screen UI in `simple_app.py`. It uses the exis
    cd vision-quest-burger
    git switch simple-smriti-ui
    ```
-3. Configure `HF_TOKEN` in the environment or in Streamlit Secrets. Do not paste a token into source code or commit it.
+3. Install Ollama for Windows from https://ollama.com/download/windows. Keep the pendrive containing your models connected, then set the model store for this PowerShell session and verify Granite is listed:
+   ```powershell
+   $env:OLLAMA_MODELS = "D:\.ollama\models"
+   ollama list
+   ```
+   The `granite3.2-vision:2b` tag must be present.
 4. Run `run_simple_smriti.bat`, or run `python -m streamlit run simple_app.py` from the activated virtual environment.
 5. Open the local URL shown in the terminal. Allow camera and microphone permissions.
 
@@ -29,7 +34,7 @@ This branch adds a smaller single-screen UI in `simple_app.py`. It uses the exis
 
 ## Important limits
 
-This is a simplified prototype, not a medical device or a guaranteed always-on background listener. The browser must remain open, permissions must be granted, and the configured Hugging Face services/network must work. Speech recognition availability varies by browser. Camera feed and analysis are separate: analysis runs when requested. The analysis panel shows actual status and observations, not hidden private model reasoning.
+This is a simplified prototype, not a medical device or a guaranteed always-on background listener. The browser and local Ollama service must remain available, and camera/microphone permissions must be granted. Browser speech recognition support and network requirements vary by browser. Voice operates as quick turn-by-turn speech recognition → local Granite response → browser speech playback, rather than simultaneous streaming audio-to-audio. Camera feed and analysis are separate: analysis runs when requested. The Live Mode connection to `127.0.0.1:11434` works when Streamlit is running on the same PC; it will not reach a user's computer from a cloud-hosted web server. The analysis panel shows actual status and observations, not hidden private model reasoning.
 
 Face comparison uses an experimental local OpenCV LBPH matcher, is sensitive to lighting and pose, and can misidentify or fail to match people; confirm identity rather than relying on it for consequential decisions. Reference portraits should only be registered with permission. Demo replies and sample observations are not real AI results and should never be treated as stored personal memories.
 
