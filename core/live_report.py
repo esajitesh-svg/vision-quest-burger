@@ -77,9 +77,9 @@ def build_live_report(
         lines.append("No completed object scan is available yet.")
     else:
         age_value = max(0.0, float(age))
-        lines.append(f"Last object scan completed {age_value:.1f} seconds ago.")
+        lines.append("A completed object scan is available.")
         if age_value > 9.0:
-            lines.append("These detections may be stale; wait for the next scan before relying on them.")
+            lines.append("The last object scan is stale; wait for a fresh scan before relying on those boxes.")
 
         if detections:
             counts = Counter(str(item.get("label", "object")) for item in detections)
