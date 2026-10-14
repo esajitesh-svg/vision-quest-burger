@@ -831,16 +831,27 @@ with vision_tab:
                 ):
                     sample = live_state.take_analysis_sample(live_interval, max_side=live_max_side)
                     if sample is not None:
-                        # Keep narrated updates brief so the spoken companion does not
-                        # begin a long description just as a newer scene arrives.
+                        # Use a concise but detailed live-companion prompt in JARVIS mode.
+                        # Feed the prior note only as context so the model can avoid rote
+                        # repetition while grounding the actual description in this frame.
                         analysis_mode = (
-                            "accessibility"
+                            "live_companion"
                             if live_voice_enabled and live_voice_narrate_scenes
                             else live_mode
                         )
+                        analysis_focus = live_question
+                        if live_voice_enabled and live_voice_narrate_scenes:
+                            prior_observation = live_state.get_status().get("latest_observation")
+                            prior_text = str((prior_observation or {}).get("text", "")).strip()
+                            if prior_text:
+                                analysis_focus = (
+                                    "Previous scene note, for comparison only: "
+                                    + prior_text[:150]
+                                    + ". Describe current visible evidence, prioritizing useful details not already covered."
+                                )
                         Thread(
                             target=run_live_vision_worker,
-                            args=(live_state, sample, analysis_mode, live_question, live_max_side),
+                            args=(live_state, sample, analysis_mode, analysis_focus, live_max_side),
                             daemon=True,
                         ).start()
 
