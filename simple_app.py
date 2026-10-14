@@ -4,8 +4,7 @@ from datetime import datetime
 import av, cv2, streamlit as st
 from pathlib import Path
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
-from core.cloud_vision import analyze_image, model_status
-from core.cloud_voice import answer_voice_query, transcribe_audio
+from core.local_granite import analyze_with_granite, ask_granite, local_granite_status, GRANITE_MODEL
 from core.cloud_db import (
  init_db, list_people, save_person, save_person_portrait, get_person_portrait,
  search_activity_for_voice, save_conversation_turn, save_observation,
@@ -191,7 +190,7 @@ if analyze:
    with st.spinner("The vision model is analysing the current frame…"):
     ok,buf=cv2.imencode(".jpg",frame,[int(cv2.IMWRITE_JPEG_QUALITY),82])
     if not ok: raise RuntimeError("Could not encode camera frame")
-    res=analyze_image(buf.tobytes(),mode="auto_observe",max_side=768)
+    res=analyze_with_granite(buf.tobytes(),mode="auto_observe",max_side=768)
    st.session_state.analysis=res.text; st.session_state.analysis_time=datetime.now().strftime("%H:%M:%S"); st.session_state.status=f"ANALYSIS COMPLETE · {res.elapsed_seconds:.1f}s"
    try: save_observation(res.text,source="Simple Smriti live camera",model=res.model,frame_hash=hashlib.sha256(buf.tobytes()).hexdigest())
    except Exception: pass
@@ -213,8 +212,13 @@ if send or voice_question:
     if mode == "DEMO MODE":
      reply = demo_reply(transcript)
     else:
-     memories=search_activity_for_voice(transcript,limit=8)
-     reply=answer_voice_query(transcript,latest_observation={"text":st.session_state.analysis,"timestamp":st.session_state.analysis_time,"mode":"auto_observe"},memories=memories,conversation_history=[{"question":x["q"],"reply":x["a"]} for x in st.session_state.chat[-4:]],live_image_bytes=live)
+     try:
+      memories=search_activity_for_voice(transcript,limit=8)
+     except Exception:
+      memories=[]
+     observation_text = st.session_state.analysis
+     latest = None if observation_text.startswith("DEMO SAMPLE") else {"text":observation_text,"timestamp":st.session_state.analysis_time,"mode":"auto_observe"}
+     reply=ask_granite(transcript,latest_observation=latest,memories=memories,conversation_history=[{"question":x["q"],"reply":x["a"]} for x in st.session_state.chat[-4:]],image_bytes=live)
    st.session_state.chat.append({"q":transcript,"a":reply}); st.session_state.chat=st.session_state.chat[-12:]; st.session_state.status="DEMO REPLY READY" if mode == "DEMO MODE" else "REPLY READY"
    st.session_state.last_transcript=transcript; st.session_state.speech_text=reply; st.session_state.speech_seq+=1
    if mode == "LIVE MODE":
@@ -230,8 +234,8 @@ with st.expander("Service status / setup"):
   st.write("Memory database:", st.session_state.smriti_db_init_error)
  else:
   st.write("Memory database: initialized")
- ready,msg=model_status(); st.write("AI service:",msg)
+ ready,msg=local_granite_status(); st.write("Local AI service:",msg)
  st.write("Selected mode:", mode)
- st.write("Demo Mode does not call a cloud model. Live Mode uses the configured Hugging Face vision/voice services.")
+ st.write("Demo Mode does not call an AI model. Live Mode uses local Ollama Granite: " + GRANITE_MODEL + ".")
  st.write("Voice uses browser speech recognition in a hands-free turn cycle after you press ACTIVATE LISTENING. The browser pauses while Smriti answers and resumes after speaking; typed questions remain available.")
- st.caption("Configure HF_TOKEN in Streamlit Secrets or environment variables. Never commit API keys. Camera access requires browser permission and HTTPS.")
+ st.caption("For Live Mode, run Ollama on this same PC and confirm the Granite model appears in ollama list. This local Ollama connection will not work from a cloud-hosted Streamlit server.")
