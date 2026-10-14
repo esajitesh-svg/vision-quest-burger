@@ -217,11 +217,6 @@ def finalize_local_video_capture(state):
   notice = state.video_notice
   if writer is not None:
    writer.release()
-  state.video_path = None
-  state.video_frames = 0
-  state.video_started = 0.0
-  state.video_tags = {}
-  state.video_notice = ""
  if pending_path is None or not pending_path.is_file():
   raise RuntimeError(notice or "No completed video clip is available to save.")
  try:
@@ -233,13 +228,42 @@ def finalize_local_video_capture(state):
    "video", data, "mp4", "video/mp4", tags,
    {"frames": frame_count, "duration_seconds": min(60.0, duration), "captured_width": 640, "captured_height": 360},
   )
-  archive_event("video_recording", {
-   "file": str(archive_path), "frames": frame_count,
-   "duration_seconds": round(min(60.0, duration), 2),
-  }, tags)
-  state.video_notice = f"Saved video clip: {archive_path}"
+  try:
+   archive_event("video_recording", {
+    "file": str(archive_path), "frames": frame_count,
+    "duration_seconds": round(min(60.0, duration), 2),
+   }, tags)
+   notice_text = f"Saved video clip: {archive_path}"
+  except Exception as log_exc:
+   notice_text = f"Video saved to {archive_path}; activity-log write failed: {type(log_exc).__name__}: {log_exc}"
+  with state.lock:
+   if state.video_path == pending_path:
+    state.video_path = None
+    state.video_frames = 0
+    state.video_started = 0.0
+    state.video_tags = {}
+   state.video_notice = notice_text
+  pending_path.unlink(missing_ok=True)
   return archive_path
- finally:
+ except Exception as save_exc:
+  with state.lock:
+   state.video_notice = f"Save failed; the temporary clip is kept so you can retry or discard it: {type(save_exc).__name__}: {save_exc}"
+  raise
+
+def discard_local_video_capture(state):
+ """Discard an explicitly started recording without adding it to the archive."""
+ with state.lock:
+  writer = state.video_writer
+  state.video_writer = None
+  pending_path = state.video_path
+  state.video_path = None
+  state.video_frames = 0
+  state.video_started = 0.0
+  state.video_tags = {}
+  state.video_notice = "Pending video clip discarded by user."
+ if writer is not None:
+  writer.release()
+ if pending_path is not None:
   pending_path.unlink(missing_ok=True)
 
 @st.fragment(run_every=1)
@@ -266,12 +290,21 @@ def render_video_archive_controls():
    st.error(f"● RECORDING VIDEO · {duration:.1f}/60 seconds · {frames} frames")
    st.progress(min(1.0, duration / 60.0))
   if has_pending:
-   if st.button("STOP & SAVE MP4 TO ARCHIVE", use_container_width=True, key="save_local_video_recording"):
-    try:
-     saved_path = finalize_local_video_capture(state)
-     st.success(f"Video saved: {saved_path}")
-    except Exception as exc:
-     st.error(f"Could not save video: {type(exc).__name__}: {exc}")
+   save_col, discard_col = st.columns(2)
+   with save_col:
+    if st.button("STOP & SAVE MP4", use_container_width=True, key="save_local_video_recording"):
+     try:
+      saved_path = finalize_local_video_capture(state)
+      st.success(f"Video saved: {saved_path}")
+     except Exception as exc:
+      st.error(f"Could not save video: {type(exc).__name__}: {exc}")
+   with discard_col:
+    if st.button("DISCARD CLIP", use_container_width=True, key="discard_local_video_recording"):
+     try:
+      discard_local_video_capture(state)
+      st.info("Pending clip discarded.")
+     except Exception as exc:
+      st.error(f"Could not discard clip: {type(exc).__name__}: {exc}")
    if notice:
     st.caption(notice)
   elif notice:
