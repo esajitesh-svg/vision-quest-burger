@@ -217,7 +217,7 @@ class LiveMonitorState:
         with self.lock:
             if self.analysis_busy or not self.latest_jpeg:
                 return None
-            interval = min(60, max(10, int(interval_seconds)))
+            interval = min(60, max(1, int(interval_seconds)))
             if not force and self.last_analysis_started is not None and now - self.last_analysis_started < interval:
                 return None
             self.analysis_busy = True
@@ -227,9 +227,9 @@ class LiveMonitorState:
     def finish_analysis(self, observation: dict[str, Any] | None = None, error: str = "") -> None:
         with self.lock:
             self.analysis_busy = False
-            # Measure the cadence from completion, not start, so a slow model
-            # cannot trigger back-to-back inferences when a fragment reruns.
-            self.last_analysis_started = time.monotonic()
+            # The interval is measured between request starts. If inference
+            # itself takes longer than the interval, the next request may start
+            # immediately after completion; analysis requests never overlap.
             self.latest_analysis_error = error[:500]
             if observation:
                 self.latest_observation = dict(observation)
