@@ -18,7 +18,11 @@ def _tone(samples=320, amplitude=3000):
 def test_speech_is_not_finalized_until_pause_and_then_returns_pcm():
     state = LiveVoiceAssistantState()
     assert state.ingest_pcm(np.zeros(320, dtype=np.int16)) is None
-    assert state.ingest_pcm(_tone()) is None
+
+    # Simulate a short spoken sentence (over the minimum voiced duration).
+    for _ in range(18):
+        assert state.ingest_pcm(_tone()) is None
+        time.sleep(0.02)
     assert state.snapshot()["speech_active"] is True
 
     # Use silent chunks until the configured end-of-turn silence is reached.
