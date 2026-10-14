@@ -134,6 +134,7 @@ def answer_voice_query(
             "relationship_label": str(item.get("relationship", ""))[:100],
             "saved_at": str(item.get("created_at", ""))[:80],
             "note": str(item.get("note", ""))[:600],
+            "source": str(item.get("source", ""))[:160],
         })
     recent_turns = []
     for turn in (conversation_history or [])[-4:]:
@@ -143,7 +144,7 @@ def answer_voice_query(
             recent_turns.append({"user": user_text, "assistant": assistant_text})
     context = {
         "latest_visual_observation": observation_context,
-        "recent_saved_memory_notes": memory_context,
+        "retrieved_memory_and_past_activity": memory_context,
         "recent_conversation_turns": recent_turns,
     }
     user_text = (
@@ -184,6 +185,8 @@ def answer_voice_query(
                 "image is the main visual evidence. If no fresh image is attached, answer from the saved "
                 "observation only and be clear when that observation may not describe the current scene. "
                 "For personal-history questions, use only supplied saved memory notes and conversation context. "
+                "Retrieved entries can be saved notes, earlier camera observations, or saved conversation records; "
+                "use each entry's label and source, and never present a past observation as proof of what is visible now. "
                 "For broad recall requests such as 'I forgot' or 'help me remember', review the supplied notes and "
                 "offer the closest explicitly saved fact. Phrase it as 'A note you saved says...' rather than claiming "
                 "to know exactly what the user forgot; if several notes could fit, offer brief choices. "
