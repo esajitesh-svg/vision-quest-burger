@@ -300,3 +300,22 @@ def test_live_detection_reservation_is_nonblocking_and_rate_limited(monkeypatch)
     clock["now"] = 100.61
     assert state.reserve_live_detection(interval_seconds=0.6) is True
     state.finish_detection(error="test cleanup")
+
+
+
+def test_latest_clean_camera_frame_can_be_encoded_without_reserving_analysis():
+    state = LiveMonitorState()
+    frame = _test_frame(640, 360)
+    state.update_frame(
+        frame,
+        b"preview-jpeg",
+        {"width": 640, "height": 360},
+        analysis_frame_bgr=frame,
+    )
+
+    encoded = state.get_latest_analysis_jpeg(max_side=320)
+
+    assert encoded and encoded[:2] == bytes([255, 216])
+    decoded = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert decoded.shape[:2] == (180, 320)
+    assert state.get_status()["analysis_busy"] is False
