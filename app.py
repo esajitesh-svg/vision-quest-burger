@@ -711,16 +711,29 @@ with vision_tab:
                         speech_metrics,
                         frame_count=0,
                     )
-                    st.components.v1.html(
-                        build_speech_html(
-                            speech_report,
-                            language=st.session_state.get("voice_language", "en-IN"),
-                            rate=float(st.session_state.get("voice_rate", 0.92)),
-                            widget_label="🔊 SPEAK FULL LIVE REPORT",
-                        ),
-                        height=92,
-                        scrolling=False,
-                    )
+                    if st.button(
+                        "Freeze / refresh report for spoken playback",
+                        key="freeze_live_report_for_speech",
+                        help="Capture this report into a stable snapshot so the live refresh will not replace the words while the browser reads them.",
+                    ):
+                        st.session_state["live_report_speech_snapshot"] = speech_report
+
+                    speech_snapshot = st.session_state.get("live_report_speech_snapshot", "")
+                    if speech_snapshot:
+                        st.caption("Spoken report is frozen at the snapshot time. Press Freeze / refresh to read the latest detections.")
+                        st.components.v1.html(
+                            build_speech_html(
+                                speech_snapshot,
+                                language=st.session_state.get("voice_language", "en-IN"),
+                                rate=float(st.session_state.get("voice_rate", 0.92)),
+                                widget_label="🔊 SPEAK FULL LIVE REPORT",
+                            ),
+                            height=92,
+                            scrolling=False,
+                        )
+                    else:
+                        st.caption("Freeze a report snapshot below, then tap Speak Full Live Report to hear the scene and every detected object.")
+
                     if st.button("Load full analysis into Voice tab", key="live_report_to_voice"):
                         st.session_state["voice_text"] = live_report
                         st.rerun(scope="app")
