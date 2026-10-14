@@ -43,6 +43,8 @@ button:disabled{opacity:.38;cursor:not-allowed}
   let recognition = null;
   let desiredListening = false;
   let speaking = false;
+  let currentSpeechKind = "";
+  let speechGeneration = 0;
   let recognitionRunning = false;
   let awaitingReply = false;
   let previouslyBusy = false;
@@ -181,16 +183,24 @@ button:disabled{opacity:.38;cursor:not-allowed}
     if (recognition) {
       try { recognition.stop(); } catch (_) {}
     }
+    speechGeneration += 1;
     if (speech) speech.cancel();
+    currentSpeechKind = "";
     speaking = false;
     startButton.disabled = !args.enabled;
     startButton.textContent = "🎙 ACTIVATE LISTENING";
     setStatus("Voice link stopped.");
   }
 
-  function speakUpdate(text, sequence) {
+  function speakUpdate(text, sequence, kind = "reply") {
     if (userStopped || !text || !speech || typeof window.SpeechSynthesisUtterance === "undefined") return;
+    const requestedKind = String(kind || "reply");
+    // Never cancel an utterance just because another camera description arrived.
+    // A direct reply is allowed to interrupt narration and take priority.
+    if (speaking && requestedKind !== "reply") return;
+    const generation = ++speechGeneration;
     speaking = true;
+    currentSpeechKind = requestedKind;
     if (recognition && recognitionRunning) {
       try { recognition.stop(); } catch (_) {}
     }
@@ -204,9 +214,14 @@ button:disabled{opacity:.38;cursor:not-allowed}
     const exact = voices.find(v => v.lang && v.lang.toLowerCase() === lang.toLowerCase());
     const sameLanguage = voices.find(v => v.lang && v.lang.toLowerCase().startsWith(lang.split("-")[0].toLowerCase()));
     if (exact || sameLanguage) utterance.voice = exact || sameLanguage;
-    utterance.onstart = () => setStatus("Smriti is speaking. Listening resumes afterwards.", true);
+    utterance.onstart = () => {
+      if (generation !== speechGeneration) return;
+      setStatus("Smriti is speaking. Listening resumes afterwards.", true);
+    };
     utterance.onend = () => {
+      if (generation !== speechGeneration) return;
       speaking = false;
+      currentSpeechKind = "";
       awaitingReply = false;
       if (desiredListening && args.enabled) {
         setStatus("Reply finished — listening again.", true);
@@ -218,14 +233,18 @@ button:disabled{opacity:.38;cursor:not-allowed}
       }
     };
     utterance.onerror = () => {
+      if (generation !== speechGeneration) return;
       speaking = false;
+      currentSpeechKind = "";
       setStatus("Voice playback failed. Check device volume or browser speech voices.");
       awaitingReply = false;
       if (desiredListening) scheduleRestart(250);
     };
     try { speech.speak(utterance); }
     catch (_) {
+      if (generation !== speechGeneration) return;
       speaking = false;
+      currentSpeechKind = "";
       setStatus("Could not play speech. Try another browser voice.");
     }
   }
@@ -254,7 +273,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
       const sequence = Number(args.speech_sequence || 0);
       if (sequence > lastSpeechSequence && args.speech_text) {
         lastSpeechSequence = sequence;
-        speakUpdate(args.speech_text, sequence);
+        speakUpdate(args.speech_text, sequence, args.speech_kind || "reply");
       }
       // Recover listening if the model errors out before producing a reply.
       if (awaitingReply && !args.busy && (wasBusy || args.voice_error)) {
