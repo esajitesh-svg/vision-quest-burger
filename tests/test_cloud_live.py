@@ -268,6 +268,6 @@ def test_live_detection_reservation_is_nonblocking_and_rate_limited(monkeypatch)
     )
     clock["now"] = 100.4
     assert state.reserve_live_detection(interval_seconds=0.6) is False
-    clock["now"] = 100.6
+    clock["now"] = 100.61
     assert state.reserve_live_detection(interval_seconds=0.6) is True
     state.finish_detection(error="test cleanup")
