@@ -446,25 +446,31 @@ class LiveMonitorState:
             if not force and self.last_analysis_started is not None and now - self.last_analysis_started < interval:
                 return None
             self.analysis_busy = True
+            self.latest_analysis_error = ""
             self.last_analysis_started = now
             if self.latest_analysis_jpeg:
                 return bytes(self.latest_analysis_jpeg)
             frame = self.latest_analysis_frame_bgr.copy()
 
-        max_side = max(64, min(int(max_side), MAX_FRAME_EDGE))
-        height, width = frame.shape[:2]
-        scale = min(1.0, max_side / float(max(width, height)))
-        if scale < 1.0:
-            frame = cv2.resize(
-                frame,
-                (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
-                interpolation=cv2.INTER_AREA,
+        try:
+            max_side = max(64, min(int(max_side), MAX_FRAME_EDGE))
+            height, width = frame.shape[:2]
+            scale = min(1.0, max_side / float(max(width, height)))
+            if scale < 1.0:
+                frame = cv2.resize(
+                    frame,
+                    (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+                    interpolation=cv2.INTER_AREA,
+                )
+            ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            if not ok:
+                raise RuntimeError("OpenCV could not encode a frame for scene analysis.")
+            return encoded.tobytes()
+        except Exception as exc:
+            self.finish_analysis(
+                error=f"Could not prepare a camera frame for AI analysis: {type(exc).__name__}: {exc}"
             )
-        ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-        if not ok:
-            self.finish_analysis(error="OpenCV could not encode a frame for scene analysis.")
             return None
-        return encoded.tobytes()
 
     def finish_analysis(self, observation: dict[str, Any] | None = None, error: str = "") -> None:
         with self.lock:

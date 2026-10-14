@@ -27,7 +27,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from streamlit_webrtc import VideoHTMLAttributes, WebRtcMode, webrtc_streamer
 
 from core.cloud_db import (init_db, list_people, list_memories, save_person, save_memory, search_memories, search_memories_for_voice, search_activity_for_voice, save_conversation_turn, list_conversation_turns, save_observation, list_observations, save_person_portrait, get_person_portrait, delete_person_portrait, export_memories_csv, export_activity_csv, has_durable_database)
-from core.cloud_vision import MODE_LABELS, analyze_image, model_status, prepare_image
+from core.cloud_vision import MODEL_ID, MODE_LABELS, analyze_image, model_status, prepare_image
 from core.realtime_detector import REALTIME_DETECTOR_LABEL, RealtimeYOLOXDetector
 from core.live_report import build_live_report
 from core.cloud_cv import process_image_opencv
@@ -510,15 +510,20 @@ with vision_tab:
             disabled=not status[0],
             help="Saves text descriptions after AI analysis finishes; it does not store continuous video or raw microphone audio. Text from live voice conversations is also logged when live JARVIS is enabled.",
         )
+        live_auto_analyze = st.checkbox(
+            "Enable automatic AI scene analysis",
+            value=True,
+            disabled=not status[0],
+            key="live_auto_analysis_enabled_v2",
+            help="When the camera is running, sends a sampled frame to the vision model and produces a written observation periodically. Turn off to save inference credits; use ANALYZE CURRENT FRAME NOW for a one-shot analysis.",
+        )
+        st.caption(
+            "Automatic analysis is enabled by default. Start the camera and allow a few seconds for the first written observation; "
+            "the provider may take longer on its first request. The analysis status and any provider error appear below the live feed."
+        )
 
         with st.expander("⚙️ PERCEPTION / CAMERA CONTROLS", expanded=False):
-            live_auto_analyze = st.checkbox(
-                "Enable automatic scene explanation",
-                value=False,
-                disabled=not status[0],
-                key="live_auto_observe_smooth",
-                help="Off by default for the smoothest feed. Enable for periodic hosted scene descriptions, or use ANALYZE CURRENT FRAME NOW when needed.",
-            )
+            st.caption("Camera controls only — automatic AI scene analysis is controlled by the visible switch above.")
             live_auto_store = st.checkbox(
                 "Auto-save new scene summaries to memory",
                 value=False,
@@ -842,12 +847,37 @@ with vision_tab:
             def live_monitor_panel():
                 snapshot_jpeg, frame_metrics, frame_count, last_frame_time = live_state.snapshot()
                 is_playing = bool(live_ctx.state.playing)
+                analysis_status = live_state.get_status()
+
+                st.markdown(
+                    "<div class='cv-workbench-label'>03 / LIVE AI ANALYSER</div>",
+                    unsafe_allow_html=True,
+                )
+                if analysis_status["latest_analysis_error"]:
+                    st.error("AI analyser error: " + str(analysis_status["latest_analysis_error"]))
+                elif analysis_status["analysis_busy"]:
+                    st.info("AI analyser is processing the latest camera frame…")
+                elif analysis_status["latest_observation"]:
+                    last_result = analysis_status["latest_observation"]
+                    st.success(
+                        "Last analysis complete · "
+                        + str(last_result.get("model", "vision model"))
+                        + " · "
+                        + str(last_result.get("elapsed", "?"))
+                        + " s"
+                    )
+                elif not is_playing:
+                    st.info("Start the camera to send a frame to the AI analyser.")
+                elif live_auto_analyze:
+                    st.info("Automatic AI analysis is enabled. Waiting for the first result…")
+                else:
+                    st.warning("Automatic AI analysis is off. Click ANALYZE CURRENT FRAME NOW for a one-shot analysis.")
 
                 manual_analyze = st.button(
                     "⚡ ANALYZE CURRENT FRAME NOW",
                     type="primary",
                     use_container_width=True,
-                    disabled=(not is_playing or not snapshot_jpeg or live_state.get_status()["analysis_busy"]),
+                    disabled=(not is_playing or frame_count <= 0 or live_state.get_status()["analysis_busy"]),
                     key="manual_live_analyze",
                 )
 
@@ -856,14 +886,26 @@ with vision_tab:
                 if manual_analyze:
                     sample = live_state.take_analysis_sample(live_interval, force=True, max_side=live_max_side)
                     if sample is None:
-                        st.warning("No fresh frame is ready or the scene analyzer is already busy.")
+                        latest_status = live_state.get_status()
+                        if latest_status["analysis_busy"]:
+                            st.info("The AI analyser is already working on a frame. Wait for the current result.")
+                        elif frame_count <= 0:
+                            st.warning("No camera frames have arrived yet. Start the webcam and wait for the live frame counter.")
+                        else:
+                            st.error("A camera frame arrived, but OpenCV could not prepare it for analysis. Check the processing error below.")
                     else:
-                        Thread(
-                            target=run_live_vision_worker,
-                            args=(live_state, sample, live_mode, live_question, live_max_side),
-                            daemon=True,
-                        ).start()
-                        st.info("Scene analysis started. The live camera and object detector continue while the result is computed.")
+                        try:
+                            Thread(
+                                target=run_live_vision_worker,
+                                args=(live_state, sample, live_mode, live_question, live_max_side),
+                                daemon=True,
+                            ).start()
+                            st.info("AI analysis started. Keep this tab open; the result appears below when the model responds.")
+                        except Exception as exc:
+                            live_state.finish_analysis(
+                                error=f"Could not start the analysis worker: {type(exc).__name__}: {exc}"
+                            )
+                            st.error("Could not start AI analysis: " + f"{type(exc).__name__}: {exc}")
                 elif is_playing and (
                     live_auto_analyze
                     or (live_voice_enabled and live_voice_narrate_scenes)
@@ -1126,8 +1168,6 @@ with vision_tab:
 
                 if current_status["latest_analysis_error"]:
                     st.error(f"Live processing/analysis notice: {current_status['latest_analysis_error']}")
-                elif current_status["analysis_busy"]:
-                    st.info("AI analysis is in progress. Additional frames are skipped until it finishes.")
 
                 record_col, stop_col = st.columns(2)
                 with record_col:
@@ -1843,7 +1883,7 @@ with settings_tab:
     st.subheader("Cloud deployment status")
     ready, status_message = model_status()
     st.write(f"**Vision engine:** {status_message}")
-    st.write("**Model:** HuggingFaceTB/SmolVLM-256M-Instruct")
+    st.write(f"**Vision model:** {MODEL_ID}")
     st.write("**OpenCV:** Headless OpenCV processes each live frame and renders selectable diagnostic views with detection overlays.")
     st.write(f"**Object detector:** {REALTIME_DETECTOR_LABEL}. The ONNX model runs on the app host using OpenCV DNN for each frame delivered by WebRTC; object detection does not call an external inference API.")
     st.write("**Camera:** Browser still capture plus WebRTC live stream. OpenCV processes each incoming frame on the cloud host. The Live camera & recording tab supports periodic AI analysis and download of silent MP4 clips up to 60 seconds/25 MB; WebRTC depends on camera permissions and STUN/TURN network access.")

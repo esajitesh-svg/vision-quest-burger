@@ -319,3 +319,25 @@ def test_latest_clean_camera_frame_can_be_encoded_without_reserving_analysis():
     decoded = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_COLOR)
     assert decoded.shape[:2] == (180, 320)
     assert state.get_status()["analysis_busy"] is False
+
+def test_live_analysis_sample_works_without_preview_jpeg_and_clears_stale_error():
+    state = LiveMonitorState()
+    frame = _test_frame(640, 360)
+    state.update_frame(
+        frame,
+        b"",
+        {"width": 640, "height": 360},
+        analysis_frame_bgr=frame,
+    )
+    assert state.snapshot()[0] is None
+    state.finish_analysis(error="previous provider failure")
+
+    sample = state.take_analysis_sample(5, force=True, max_side=320)
+
+    assert sample and sample[:2] == bytes([255, 216])
+    status = state.get_status()
+    assert status["analysis_busy"] is True
+    assert status["latest_analysis_error"] == ""
+    state.finish_analysis(observation={"text": "test observation", "sequence": 1})
+    assert state.get_status()["latest_observation"]["text"] == "test observation"
+
