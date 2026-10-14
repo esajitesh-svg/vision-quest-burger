@@ -49,16 +49,20 @@ def render_cv_view(
     if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
         raise ValueError("OpenCV display input must have three color channels.")
 
-    source = frame_bgr.copy()
-    gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
+    # Treat the incoming frame as read-only. In the common COLOR + HUD path,
+    # avoid an unnecessary grayscale conversion and an extra full-frame copy.
+    source = frame_bgr
     low = max(0, min(254, int(canny_low)))
     high = max(low + 1, min(255, int(canny_high)))
 
     if mode == "GRAYSCALE":
+        gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
         display = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     elif mode == "CANNY EDGE MAP":
+        gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
         display = cv2.cvtColor(cv2.Canny(gray, low, high), cv2.COLOR_GRAY2BGR)
     elif mode == "CONTOUR MAP":
+        gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         _, mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -70,6 +74,7 @@ def render_cv_view(
             if width > 24 and height > 20:
                 cv2.rectangle(display, (x, y), (x + width, y + height), (255, 210, 60), 1)
     elif mode == "ADAPTIVE THRESHOLD":
+        gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
         mask = cv2.adaptiveThreshold(
             cv2.GaussianBlur(gray, (5, 5), 0),
             255,
@@ -353,7 +358,7 @@ with vision_tab:
     with live_tab:
         st.markdown("<div class='cv-workbench-label'>01 / LIVE SENSOR INPUT · WEBCAM</div><div class='cv-feed-heading'>LIVE OPTICAL FEED // REAL-TIME CV PIPELINE</div>", unsafe_allow_html=True)
         st.write("VisionQuest prioritizes a responsive live video feed. Local OpenCV DNN object detection runs asynchronously on a recent frame instead of blocking every video frame; boxes update periodically and disappear when too old. A separate hosted vision-language model explains sampled scenes.")
-        st.caption("Camera video is sent to the hosted app for processing. The default HD 1280×720 capture balances detail and latency; Full HD remains selectable. Local object detection runs asynchronously at a limited cadence so it does not hold up the video callback. Only scene-explanation samples use the external vision-language provider. Use consented test scenes.")
+        st.caption("Smooth-first defaults: Standard 640×360 at about 10 FPS, with automatic scene analysis and local object detection initially off. Turn either on only when needed. HD and Full HD remain selectable for more detail; hosted AI analysis can still take time after you request it. Use consented test scenes.")
         with st.expander("⚙️ PERCEPTION / CAMERA CONTROLS", expanded=False):
             live_auto_analyze = st.checkbox(
                 "Enable automatic scene explanation",
