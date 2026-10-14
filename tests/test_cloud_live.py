@@ -18,6 +18,33 @@ def _test_frame(width: int = 640, height: int = 360) -> np.ndarray:
     return frame
 
 
+def test_live_frame_can_skip_jpeg_encoding_for_camera_callback():
+    frame, encoded, metrics = process_live_frame(
+        _test_frame(1280, 720), max_side=1280, encode_jpeg=False
+    )
+    assert frame.shape[:2] == (720, 1280)
+    assert encoded == b""
+    assert metrics["jpeg_bytes"] == 0
+
+
+def test_scene_analysis_encodes_a_lazy_resized_frame_only_when_requested():
+    state = LiveMonitorState()
+    frame, _, metrics = process_live_frame(_test_frame(640, 360), encode_jpeg=False)
+    state.update_frame(
+        frame,
+        b"preview-jpeg",
+        metrics,
+        analysis_frame_bgr=frame,
+    )
+
+    sample = state.take_analysis_sample(5, max_side=320)
+    assert sample and sample[:2] == bytes([255, 216])
+    decoded = cv2.imdecode(np.frombuffer(sample, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert decoded.shape[:2] == (180, 320)
+    assert state.get_status()["analysis_busy"] is True
+    state.finish_analysis(observation={"text": "sampled"})
+
+
 def test_live_frame_processing_resizes_and_returns_jpeg():
     frame, encoded, metrics = process_live_frame(_test_frame(1280, 720), max_side=640)
     assert frame.shape[1] <= 640
