@@ -68,6 +68,8 @@ def connect():
         raw = psycopg.connect(database_url, row_factory=dict_row, connect_timeout=10)
         conn = _PostgresAdapter(raw)
     else:
+        # A fresh clone may not yet contain the local data directory.
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         raw = sqlite3.connect(DB_PATH, timeout=10)
         raw.row_factory = sqlite3.Row
         raw.execute("PRAGMA foreign_keys=ON")
