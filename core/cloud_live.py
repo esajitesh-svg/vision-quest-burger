@@ -81,9 +81,9 @@ def process_live_frame(
     metrics = {
         "width": int(width),
         "height": int(height),
-        "jpeg_bytes": len(encoded_bytes),
-        "jpeg_quality": 90,
     }
+    if encode_jpeg:
+        metrics.update({"jpeg_bytes": len(encoded_bytes), "jpeg_quality": 90})
     if compute_metrics and brightness is not None and sharpness is not None:
         metrics.update({
             "brightness": round(brightness, 1),
