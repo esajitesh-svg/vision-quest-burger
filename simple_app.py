@@ -58,11 +58,15 @@ st.markdown("<hr>", unsafe_allow_html=True)
 class CamState:
  def __init__(self): self.lock=threading.Lock(); self.frame=None
 class Processor:
- def __init__(self): self.state=st.session_state.cam_state
- def recv(self,frame):
-  arr=frame.to_ndarray(format="bgr24")
-  with self.state.lock: self.state.frame=arr.copy()
-  return av.VideoFrame.from_ndarray(arr,format="bgr24")
+ def __init__(self, state):
+  # Receive the per-session state explicitly. WebRTC callbacks execute on a
+  # worker thread, so they must not look up st.session_state themselves.
+  self.state = state
+ def recv(self, frame):
+  arr = frame.to_ndarray(format="bgr24")
+  with self.state.lock:
+   self.state.frame = arr.copy()
+  return av.VideoFrame.from_ndarray(arr, format="bgr24")
 defaults={"cam_state":CamState(),"analysis":"No scene analysis yet. Start the camera and analyse a frame.","analysis_time":"Not run","chat":[],"audio_hash":"","voice_event_id":"","last_transcript":"","speech_text":"","speech_seq":0,"status":"READY"}
 for k,v in defaults.items():
  if k not in st.session_state: st.session_state[k]=v
@@ -91,8 +95,28 @@ with l:
  st.markdown('</div>',unsafe_allow_html=True)
 with r:
  st.markdown('<div class="panel"><div class="kicker">03 / LIVE CAMERA FEED</div>',unsafe_allow_html=True)
- webrtc_streamer(key="smriti-camera",mode=WebRtcMode.SENDRECV,video_processor_factory=Processor,media_stream_constraints={"video":{"width":{"ideal":1280},"height":{"ideal":720},"frameRate":{"ideal":20,"max":24}},"audio":False},async_processing=True)
- st.caption("Allow camera access. Scene analysis runs when requested.")
+ camera_state = st.session_state.cam_state
+ camera_ctx = webrtc_streamer(
+  key="smriti-camera",
+  mode=WebRtcMode.SENDRECV,
+  video_processor_factory=lambda: Processor(camera_state),
+  rtc_configuration={"iceServers":[{"urls":["stun:stun.l.google.com:19302"]}]},
+  media_stream_constraints={
+   "video":{
+    "facingMode":"user",
+    "width":{"ideal":640,"max":1280},
+    "height":{"ideal":480,"max":720},
+    "frameRate":{"ideal":15,"max":20},
+   },
+   "audio":False,
+  },
+  async_processing=True,
+ )
+ if camera_ctx.state.playing:
+  st.success("Camera is streaming. You can analyse the current frame.")
+ else:
+  st.info("Click START in the camera controls and allow camera access in Chrome/Edge. For local use, open http://localhost:8501 rather than a LAN IP or plain HTTP remote link.")
+ st.caption("The camera frame is processed locally by this app; scene analysis runs only when you click ANALYZE CURRENT FRAME.")
  analyze=st.button("ANALYZE CURRENT FRAME",use_container_width=True)
  st.markdown('</div>',unsafe_allow_html=True)
 with st.expander("06 / FACE RECOGNITION — LOCAL ENROLMENT", expanded=False):
