@@ -1149,7 +1149,7 @@ with memory_tab:
 with voice_tab:
     st.subheader("JARVIS-STYLE VOICE COMPANION")
     st.write("Talk in turns: ask a question, get a reply spoken in the same browser voice this website already uses, then record your next question. Recent conversation turns are retained during this browser session so follow-up questions can make sense.")
-    st.warning("This is push-to-talk, not an always-open microphone. When you submit a clip, the audio goes to Hugging Face for transcription; your question and limited context go to the hosted model. Audio and transcripts are not automatically stored as memory.")
+    st.warning("This is turn-based recording, not an always-open microphone. When you finish a recording, that audio clip is sent to Hugging Face for transcription; your question and relevant context go to the hosted model. Audio and transcripts are not automatically stored as memory.")
     voice_language_col, voice_rate_col = st.columns([1, 1])
     with voice_language_col:
         st.selectbox(
@@ -1179,14 +1179,8 @@ with voice_tab:
         key="voice_question_audio",
         help="Tap to record, then stop. Ask about the current scene or a saved demo memory.",
     )
-    voice_submit = st.button(
-        "🎙️ LISTEN & REPLY",
-        type="primary",
-        use_container_width=True,
-        disabled=voice_audio is None,
-        key="process_voice_question",
-    )
-    if voice_submit and voice_audio is not None:
+    st.caption("After you stop the recording, VisionQuest processes it automatically and speaks the answer when ready. Record your next turn after the reply finishes.")
+    if voice_audio is not None:
         audio_bytes = voice_audio.getvalue()
         audio_hash = hashlib.sha256(audio_bytes).hexdigest()
         if not audio_bytes:
@@ -1194,7 +1188,7 @@ with voice_tab:
         elif hmac.compare_digest(
             audio_hash, st.session_state.get("voice_last_audio_hash", "")
         ):
-            st.info("That recording has already been processed. Record a new message to ask another question.")
+            pass  # Streamlit reruns the script frequently; do not process the same clip twice.
         else:
             voice_frame_reserved = False
             live_image_bytes = None
