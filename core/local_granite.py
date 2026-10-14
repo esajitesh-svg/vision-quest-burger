@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 import os
 import re
 import time
 from dataclasses import dataclass
 from typing import Any
 
+from PIL import Image, ImageOps, UnidentifiedImageError
 import requests
 
 GRANITE_MODEL = os.getenv("SMRITI_GRANITE_MODEL", "granite3.2-vision:2b")
@@ -58,6 +60,23 @@ def local_granite_status() -> tuple[bool, str]:
         return False, "Ollama returned an unexpected model-list response."
 
 
+def prepare_ollama_image(image_bytes: bytes, max_side: int = 640, quality: int = 84) -> bytes:
+    """Resize and JPEG-encode an image once before sending it to the local vision model."""
+    if not image_bytes:
+        raise ValueError("No camera image was supplied to the Observer.")
+    max_side = max(256, min(int(max_side), 1280))
+    quality = max(65, min(int(quality), 95))
+    try:
+        with Image.open(BytesIO(image_bytes)) as source:
+            image = ImageOps.exif_transpose(source).convert("RGB")
+            image.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+            buffer = BytesIO()
+            image.save(buffer, format="JPEG", quality=quality, optimize=False)
+            return buffer.getvalue()
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        raise ValueError("The Observer could not decode the camera frame. Try restarting the camera.") from exc
+
+
 def _chat(
     prompt: str,
     *,
@@ -90,10 +109,16 @@ def _chat(
         ],
         "options": {
             "temperature": 0.2,
-            "num_ctx": 2048,
+            # A bounded CPU thread count avoids over-subscribing a modest desktop.
+            "num_thread": max(
+                1,
+                min(8, int(os.getenv("SMRITI_OLLAMA_THREADS", str(max(1, (os.cpu_count() or 6) - 2))))),
+            ),
+            "num_ctx": 1536,
             "num_predict": max(32, min(int(num_predict), 500)),
         },
-        "keep_alive": "10m",
+        # Keep the vision model resident while the observer is in use.
+        "keep_alive": "20m",
     }
     started = time.perf_counter()
     try:
@@ -137,11 +162,14 @@ def analyze_with_granite(
     max_side: int = 768,
 ) -> GraniteResult:
     """Describe a supplied image locally using the selected Granite vision model."""
-    del max_side  # The UI already caps encoded camera images to a reasonable size.
+    prepared_image = prepare_ollama_image(image_bytes, max_side=max_side, quality=84)
     tasks = {
         "auto_observe": (
-            "Describe the visible scene, distinct objects and their positions, visible actions, readable text, "
-            "and uncertainties. Be specific but concise. Only report what this single image supports."
+            "Observe this camera frame carefully. In 3–5 concise sentences, report the setting, the most important "
+            "visible objects and their positions, any clearly visible activity, and readable text only when legible. "
+            "Mention small or uncertain details as uncertain. Do not identify people, infer relationships, emotions "
+            "or intent, or guess objects hidden by blur or obstruction. Prefer specific visual evidence over generic "
+            "phrases. Do not repeat information."
         ),
         "scene": "Describe this image in 2 to 4 concise sentences using visible evidence only.",
         "objects": "List clearly visible objects and their positions. Do not guess obscured objects.",
@@ -153,8 +181,8 @@ def analyze_with_granite(
             "You are Smriti, a visual memory companion. Do not identify people by face, infer personal "
             "relationships, guess emotions or intent, or invent off-screen details."
         ),
-        image_bytes=bytes(image_bytes or b""),
-        num_predict=260 if mode == "auto_observe" else 160,
+        image_bytes=prepared_image,
+        num_predict=180 if mode == "auto_observe" else 140,
     )
 
 
