@@ -1147,9 +1147,26 @@ with memory_tab:
             st.info("No memory notes saved for this person yet.")
 
 with voice_tab:
-    st.subheader("Talk to VisionQuest")
-    st.write("Record a short question, get it transcribed, and receive a spoken reply based on the latest completed visual observation and recent saved memory notes. This is push-to-talk, not a continuously open microphone.")
-    st.warning("When you press Listen & reply, the recorded audio is sent to Hugging Face for transcription. The question and relevant memory context are sent to the configured hosted model for a reply. Voice clips and transcripts are not automatically saved as memory entries. Use consented fictional demo data.")
+    st.subheader("JARVIS-STYLE VOICE COMPANION")
+    st.write("Talk in turns: ask a question, get a reply spoken in the same browser voice this website already uses, then record your next question. Recent conversation turns are retained during this browser session so follow-up questions can make sense.")
+    st.warning("This is push-to-talk, not an always-open microphone. When you submit a clip, the audio goes to Hugging Face for transcription; your question and limited context go to the hosted model. Audio and transcripts are not automatically stored as memory.")
+    voice_language_col, voice_rate_col = st.columns([1, 1])
+    with voice_language_col:
+        st.selectbox(
+            "Companion voice language",
+            options=list(SUPPORTED_LANGUAGES),
+            format_func=lambda code: SUPPORTED_LANGUAGES[code],
+            key="voice_language",
+            help="Uses the same browser speech engine and voice-selection logic as the rest of this website. The exact installed voice depends on your device.",
+        )
+    with voice_rate_col:
+        st.slider("Speaking speed", min_value=0.65, max_value=1.25, value=0.92, step=0.05, key="voice_rate")
+    auto_speak_reply = st.checkbox(
+        "Automatically speak every new answer",
+        value=True,
+        key="voice_auto_speak",
+        help="Uses the same browser-native voice as the website's Read Aloud controls. The Speak Reply button remains available if autoplay is blocked.",
+    )
     voice_audio = st.audio_input(
         "Record a short voice question",
         sample_rate=16000,
@@ -1181,14 +1198,17 @@ with voice_tab:
                     )
                     live_context = live_state.get_status().get("latest_observation")
                     recent_memory_context = list_memories(limit=10)
+                    prior_turns = st.session_state.get("voice_chat_history", [])[-4:]
                     reply = answer_voice_query(
                         transcript,
                         latest_observation=live_context,
                         memories=recent_memory_context,
+                        conversation_history=prior_turns,
                     )
                 st.session_state["voice_last_audio_hash"] = audio_hash
                 st.session_state["voice_latest_transcript"] = transcript
                 st.session_state["voice_latest_reply"] = reply
+                st.session_state["voice_auto_speak_pending"] = bool(auto_speak_reply)
                 history = st.session_state.get("voice_chat_history", [])
                 history.append({"question": transcript, "reply": reply})
                 st.session_state["voice_chat_history"] = history[-10:]
@@ -1203,17 +1223,21 @@ with voice_tab:
     if latest_voice_reply:
         st.markdown("**VisionQuest replies**")
         st.markdown(f"<div class='result'>{escape(latest_voice_reply)}</div>", unsafe_allow_html=True)
+        autoplay_this_reply = bool(st.session_state.pop("voice_auto_speak_pending", False))
         st.components.v1.html(
             build_speech_html(
                 latest_voice_reply,
                 language=st.session_state.get("voice_language", "en-IN"),
                 rate=float(st.session_state.get("voice_rate", 0.92)),
-                widget_label="🔊 SPEAK REPLY",
+                widget_label="🔊 REPLAY REPLY" if autoplay_this_reply else "🔊 SPEAK REPLY",
+                autoplay=autoplay_this_reply,
             ),
-            height=92,
+            height=100,
             scrolling=False,
         )
-    st.caption("For a new turn, record a new clip and press Listen & reply. Replies use the latest completed scene analysis and up to 10 recent saved memory notes; they do not identify people or invent missing personal history.")
+        if autoplay_this_reply:
+            st.caption("Your new answer is being spoken in the website voice. If your browser blocks automatic speech, tap Speak Reply.")
+    st.caption("When the answer finishes, record the next question to continue the conversation. The last four turns are included for follow-up context; the latest completed visual observation and recent saved memory notes may also be used.")
     with st.expander("Recent voice turns"):
         voice_history = st.session_state.get("voice_chat_history", [])
         if voice_history:
@@ -1227,18 +1251,7 @@ with voice_tab:
 
     st.divider()
     st.subheader("Read aloud")
-    st.write("Read visual observations and reviewed memory notes aloud using speech voices available on this device's browser. Speech is generated in the browser using built-in speech synthesis, with no separate text-to-speech service or audio file.")
-    settings_col, rate_col = st.columns([1, 1])
-    with settings_col:
-        st.selectbox(
-            "Voice language",
-            options=list(SUPPORTED_LANGUAGES),
-            format_func=lambda code: SUPPORTED_LANGUAGES[code],
-            key="voice_language",
-            help="The browser chooses the closest installed voice for this language. Voice availability depends on the device.",
-        )
-    with rate_col:
-        st.slider("Speaking speed", min_value=0.65, max_value=1.25, value=0.92, step=0.05, key="voice_rate")
+    st.write("Replay visual observations, saved notes, or custom text with the same browser-native voice settings selected above. No separate text-to-speech service or audio file is used.")
 
     latest_for_voice = st.session_state.get("latest_result")
     if "voice_text" not in st.session_state:
