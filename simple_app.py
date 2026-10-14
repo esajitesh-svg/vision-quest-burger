@@ -390,12 +390,13 @@ def render_live_analyser():
           "frame_height": result.image_size[1],
          }, current_archive_tags())
         except Exception as archive_exc:
-         st.session_state.opencv_detection_error = "Detected objects, but local archive failed: " + str(archive_exc)
+         st.session_state.opencv_detection_archive_error = "Object detection succeeded, but local archive failed: " + str(archive_exc)
       except Exception as detector_exc:
        st.session_state.opencv_detection_error = f"{type(detector_exc).__name__}: {detector_exc}"
     elif not detect_objects:
      st.session_state.opencv_detections = []
      st.session_state.opencv_detection_error = ""
+     st.session_state.opencv_detection_archive_error = ""
      st.session_state.opencv_detection_last_run = 0.0
 
     detection_age = (
@@ -423,6 +424,8 @@ def render_live_analyser():
       st.caption("Uncheck and recheck object detection to retry after correcting the issue.")
      else:
       st.caption(f"Detector: {REALTIME_DETECTOR_LABEL} · backend: {st.session_state.opencv_detector_backend} · last inference {st.session_state.opencv_detection_elapsed*1000:.0f} ms · detections refresh about every 2.5 seconds")
+      if st.session_state.opencv_detection_archive_error:
+       st.warning(st.session_state.opencv_detection_archive_error)
       if active_detections:
        st.write("**Current object labels**")
        for item in active_detections:
