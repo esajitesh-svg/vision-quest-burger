@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import pytest
 
-from core.cloud_live import LiveMonitorState, process_live_frame
+from core.cloud_live import LiveMonitorState, process_live_frame, render_cv_view
 
 
 def _test_frame(width: int = 640, height: int = 360) -> np.ndarray:
@@ -27,6 +27,39 @@ def test_live_frame_processing_resizes_and_returns_jpeg():
     assert metrics["height"] == frame.shape[0]
     assert "brightness" in metrics
     assert "sharpness" in metrics
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "COLOR + HUD",
+        "GRAYSCALE",
+        "CANNY EDGE MAP",
+        "CONTOUR MAP",
+        "ADAPTIVE THRESHOLD",
+        "HSV SATURATION",
+    ],
+)
+def test_live_cv_display_modes_return_frame_sized_color_images(mode):
+    frame = _test_frame()
+    rendered = render_cv_view(frame, mode=mode, canny_low=55, canny_high=140, frame_count=12)
+    assert rendered.shape == frame.shape
+    assert rendered.dtype == np.uint8
+    assert rendered.ndim == 3
+    assert rendered.shape[2] == 3
+
+
+def test_display_pipeline_is_separate_from_ai_analysis_frame():
+    state = LiveMonitorState()
+    frame, color_jpeg, metrics = process_live_frame(_test_frame())
+    display = render_cv_view(frame, mode="CANNY EDGE MAP")
+    ok, display_encoded = cv2.imencode(".jpg", display)
+    assert ok
+    display_jpeg = display_encoded.tobytes()
+
+    state.update_frame(display, display_jpeg, metrics, analysis_jpeg=color_jpeg)
+    assert state.snapshot()[0] == display_jpeg
+    assert state.take_analysis_sample(1) == color_jpeg
 
 
 def test_live_frame_rejects_empty_input():
