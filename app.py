@@ -429,12 +429,20 @@ if status[0]:
     st.success(status[1])
 else:
     st.warning(status[1])
+if has_durable_database():
+    st.success("LONG-TERM MEMORY STORAGE: managed PostgreSQL is configured.")
+else:
+    st.warning(
+        "LONG-TERM STORAGE IS NOT CONFIGURED: this app is using its local SQLite file. "
+        "Streamlit hosting can reset that file on restart or redeploy. Add DATABASE_URL in hosting Secrets "
+        "for a managed PostgreSQL database; use the Activity Log export as a manual backup until then."
+    )
 st.caption(
     "Privacy notice: the camera stream is processed on the app host. Local object detection runs there using OpenCV DNN; sampled scene-explanation frames and uploaded images are sent to the configured external vision-language provider. "
     "The app does not intentionally save source photos, but the provider processes the image request. Use fictional test scenes and obtain consent; do not upload private medical or sensitive imagery."
 )
 
-vision_tab, people_tab, memory_tab, voice_tab, search_tab, settings_tab = st.tabs(["◉ CV WORKSPACE", "PERSON NODES", "MEMORY INDEX", "VOICE I/O", "QUERY", "RUNTIME"])
+vision_tab, people_tab, memory_tab, voice_tab, activity_tab, search_tab, settings_tab = st.tabs(["◉ CV WORKSPACE", "PERSON NODES", "MEMORY INDEX", "VOICE I/O", "ACTIVITY LOG", "QUERY", "RUNTIME"])
 
 with vision_tab:
     live_tab, image_lab_tab = st.tabs(["🎥 LIVE SENSING // WEBCAM", "📸 IMAGE LAB"])
@@ -442,7 +450,7 @@ with vision_tab:
     with live_tab:
         st.markdown("<div class='cv-workbench-label'>01 / LIVE SENSOR INPUT · WEBCAM</div><div class='cv-feed-heading'>LIVE OPTICAL FEED // REAL-TIME CV PIPELINE</div>", unsafe_allow_html=True)
         st.write("VisionQuest prioritizes a responsive live video feed. Local OpenCV DNN object detection runs asynchronously on a recent frame instead of blocking every video frame; boxes update periodically and disappear when too old. A separate hosted vision-language model explains sampled scenes.")
-        st.caption("Smooth-first defaults: Standard 640×360 at about 10 FPS, with automatic scene analysis and local object detection initially off. Turn either on only when needed. HD and Full HD remain selectable for more detail; hosted AI analysis can still take time after you request it. Use consented test scenes.")
+        st.caption("Smooth-first camera feed. Browser-native speech recognition captures spoken turns without sending each clip through a second hosted transcription call. Scene descriptions and chat summaries can be stored in the Activity Log; continuous video/audio is not recorded.")
         st.markdown(
             "<div class='cv-workbench-label'>02 / JARVIS VOICE LINK · LIVE COMPANION</div>",
             unsafe_allow_html=True,
@@ -470,9 +478,16 @@ with vision_tab:
         )
         if live_voice_enabled:
             st.info(
-                "JARVIS MODE IS OPT-IN: your microphone is active only during the running camera session. "
-                "After turning this on, STOP and START the camera once and allow mic access. Click STOP to end listening."
+                "JARVIS MODE IS OPT-IN: browser microphone listening starts only after you press ACTIVATE LISTENING below. "
+                "The voice link pauses while Smriti speaks. Press STOP to end listening."
             )
+        live_auto_save_observations = st.checkbox(
+            "Remember completed camera observations in the long-term Activity Log",
+            value=True,
+            key="live_save_observation_log",
+            disabled=not status[0],
+            help="Saves text descriptions after AI analysis finishes; it does not store continuous video or raw microphone audio. Text from live voice conversations is also logged when live JARVIS is enabled.",
+        )
 
         with st.expander("⚙️ PERCEPTION / CAMERA CONTROLS", expanded=False):
             live_auto_analyze = st.checkbox(
@@ -645,65 +660,6 @@ with vision_tab:
                 "credential": turn_credential,
             })
 
-        audio_resampler = None
-        if live_voice_enabled:
-            if "live_jarvis_audio_resampler" not in st.session_state:
-                st.session_state["live_jarvis_audio_resampler"] = av.AudioResampler(
-                    format="s16",
-                    layout="mono",
-                    rate=16000,
-                )
-            audio_resampler = st.session_state["live_jarvis_audio_resampler"]
-
-        def on_live_audio_frame(frame):
-            """Continuously receive mic frames, detect speech pauses, and queue short turns."""
-            try:
-                live_voice_state.note_audio_frame()
-                if audio_resampler is not None:
-                    for resampled in audio_resampler.resample(frame):
-                        samples = resampled.to_ndarray().reshape(-1).astype(np.int16, copy=False)
-                        completed_pcm = live_voice_state.ingest_pcm(samples, sample_rate=16000)
-                        if completed_pcm is not None:
-                            if live_voice_state.begin_processing():
-                                try:
-                                    Thread(
-                                        target=run_live_voice_worker,
-                                        args=(live_voice_state, live_state, completed_pcm),
-                                        daemon=True,
-                                    ).start()
-                                except Exception as exc:
-                                    live_voice_state.fail_turn(
-                                        f"Could not start voice worker: {type(exc).__name__}: {exc}"
-                                    )
-            except Exception as exc:
-                live_voice_state.fail_turn(
-                    f"Microphone frame error: {type(exc).__name__}: {exc}"
-                )
-            # Do not loop the microphone audio back to the visitor.
-            try:
-                silence = np.zeros_like(frame.to_ndarray())
-                muted_frame = av.AudioFrame.from_ndarray(
-                    silence,
-                    format=frame.format.name,
-                    layout=frame.layout.name,
-                )
-                muted_frame.sample_rate = frame.sample_rate
-                muted_frame.pts = frame.pts
-                muted_frame.time_base = frame.time_base
-                return muted_frame
-            except Exception:
-                # Last-resort muting preserves the original frame's audio format.
-                # Never intentionally pass the captured microphone audio back out.
-                try:
-                    for plane in frame.planes:
-                        plane.update(bytes(plane.buffer_size))
-                    return frame
-                except Exception as mute_error:
-                    live_voice_state.fail_turn(
-                        f"Could not safely mute the outgoing microphone track: {type(mute_error).__name__}: {mute_error}"
-                    )
-                    return frame
-
         def on_live_media_ended():
             live_state.close()
             live_voice_state.set_streaming(False)
@@ -836,16 +792,9 @@ with vision_tab:
                         "height": {"ideal": live_capture_height},
                         "frameRate": {"ideal": 10, "max": 12},
                     },
-                    "audio": (
-                        {
-                            "echoCancellation": True,
-                            "noiseSuppression": True,
-                            "autoGainControl": True,
-                        }
-                        if live_voice_enabled else False
-                    ),
+                    "audio": False,
                 },
-                audio_frame_callback=on_live_audio_frame if live_voice_enabled else None,
+                audio_frame_callback=None,
                 async_processing=True,
                 on_video_ended=on_live_media_ended,
                 video_html_attrs=VideoHTMLAttributes(
