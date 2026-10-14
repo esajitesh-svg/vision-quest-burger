@@ -5,6 +5,7 @@ The raw clip is not written to the memory database by this module.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import time
@@ -81,6 +82,7 @@ def answer_voice_query(
     latest_observation: dict[str, Any] | None = None,
     memories: list[dict[str, Any]] | None = None,
     conversation_history: list[dict[str, str]] | None = None,
+    live_image_bytes: bytes | None = None,
 ) -> str:
     """Answer a spoken question using only bounded live-observation and memory context."""
     question = (question or "").strip()
@@ -124,22 +126,52 @@ def answer_voice_query(
             "role": "system",
             "content": (
                 "You are Smriti AI, a calm, friendly voice companion. Reply in the user's language, "
-                "using 1–4 short spoken sentences. For questions about what is currently visible, use "
-                "only latest_visual_observation. For personal-history questions, use only the supplied "
-                "saved memory notes. Never invent memories, identify a person from the camera, diagnose "
-                "a condition, or claim certainty the evidence does not support. If the context does not "
-                "contain the answer, say you do not have that information yet and suggest what note could "
-                "be saved. General greetings and simple general questions are okay. Do not claim to have "
-                "saved anything unless the app confirms it."
+                "using 1–4 short spoken sentences. When a live camera image is included, use its visible "
+                "evidence for questions about what is happening now. Use the latest_visual_observation "
+                "as a fallback when no live image is included. For personal-history questions, use only "
+                "the supplied saved memory notes and conversation context. Never invent memories, identify "
+                "a person from the camera, diagnose a condition, or claim certainty the evidence does not "
+                "support. If the context does not contain the answer, say you do not have that information "
+                "yet and suggest what note could be saved. General greetings and simple general questions "
+                "are okay. Do not claim to have saved anything unless the app confirms it."
             ),
         },
         {
             "role": "user",
             "content": (
-                "Context data (may be empty):\n"
-                + json.dumps(context, ensure_ascii=False)
-                + "\n\nSpoken question: "
-                + question
+                [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Context data (may be empty):\n"
+                            + json.dumps(context, ensure_ascii=False)
+                            + "\n\nSpoken question: "
+                            + question
+                            + (
+                                "\n\nA fresh frame from the live camera is attached. Use it for "
+                                "questions about the current view; do not guess identities."
+                                if live_image_bytes else ""
+                            )
+                        ),
+                    }
+                ]
+                + (
+                    [{
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/jpeg;base64,"
+                            + base64.b64encode(live_image_bytes).decode("ascii")
+                        },
+                    }]
+                    if live_image_bytes else []
+                )
+                if live_image_bytes
+                else (
+                    "Context data (may be empty):\n"
+                    + json.dumps(context, ensure_ascii=False)
+                    + "\n\nSpoken question: "
+                    + question
+                )
             ),
         },
     ]
