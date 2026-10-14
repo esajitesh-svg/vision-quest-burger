@@ -30,6 +30,28 @@ def test_live_frame_processing_resizes_and_returns_jpeg():
 
 
 @pytest.mark.parametrize(
+    ("width", "height", "max_side", "expected_width", "expected_height"),
+    [
+        (1280, 720, 1280, 1280, 720),
+        (1920, 1080, 1920, 1920, 1080),
+        (1920, 1080, 1280, 1280, 720),
+    ],
+)
+def test_live_frame_processing_supports_higher_camera_resolutions(
+    width, height, max_side, expected_width, expected_height
+):
+    frame, encoded, metrics = process_live_frame(
+        _test_frame(width, height), max_side=max_side
+    )
+    assert frame.shape[1] == expected_width
+    assert frame.shape[0] == expected_height
+    assert metrics["width"] == expected_width
+    assert metrics["height"] == expected_height
+    assert encoded[:2] == bytes([255, 216])
+    assert len(encoded) > 1000
+
+
+@pytest.mark.parametrize(
     "mode",
     [
         "COLOR + HUD",
