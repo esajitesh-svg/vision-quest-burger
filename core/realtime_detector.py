@@ -114,8 +114,24 @@ class RealtimeYOLOXDetector:
         self.input_size = (MODEL_INPUT_SIZE, MODEL_INPUT_SIZE)
         self.net = net if net is not None else cv2.dnn.readNet(str(model_path or _model_path()))
         self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
         self._infer_lock = threading.Lock()
+        self.acceleration_backend = "OpenCV DNN CPU"
+        self._using_opencl = False
+        # Try OpenCL (which may use an Intel integrated GPU) only when this build
+        # exposes it. Actual availability is confirmed by the first forward pass;
+        # the detector falls back to CPU if that pass fails.
+        try:
+            if hasattr(cv2, "ocl") and cv2.ocl.haveOpenCL():
+                cv2.ocl.setUseOpenCL(True)
+                self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_OPENCL)
+                self._using_opencl = True
+                self.acceleration_backend = "OpenCV DNN OpenCL (provisional)"
+            else:
+                self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+        except (cv2.error, AttributeError):
+            self._using_opencl = False
+            self.acceleration_backend = "OpenCV DNN CPU"
+            self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
         self._grids, self._expanded_strides = self._create_grids()
 
     @staticmethod
@@ -237,10 +253,21 @@ class RealtimeYOLOXDetector:
         try:
             with self._infer_lock:
                 self.net.setInput(blob)
-                outputs = self.net.forward(self.net.getUnconnectedOutLayersNames())
+                try:
+                    outputs = self.net.forward(self.net.getUnconnectedOutLayersNames())
+                except cv2.error:
+                    if not self._using_opencl:
+                        raise
+                    # OpenCL device/driver support differs across machines; make one
+                    # transparent CPU retry rather than breaking the live camera.
+                    self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                    self._using_opencl = False
+                    self.acceleration_backend = "OpenCV DNN CPU (OpenCL fallback)"
+                    self.net.setInput(blob)
+                    outputs = self.net.forward(self.net.getUnconnectedOutLayersNames())
         except cv2.error as exc:
             raise RuntimeError(
-                "OpenCV DNN could not run the YOLOX model on this host CPU. "
+                "OpenCV DNN could not run the YOLOX model using OpenCL or CPU. "
                 "The camera can still be used without object labels."
             ) from exc
         elapsed = max(0.001, time.perf_counter() - started)
