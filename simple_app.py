@@ -55,6 +55,45 @@ def get_local_object_detector():
  """Load the OpenCV DNN object detector once; weights are cached locally."""
  return RealtimeYOLOXDetector()
 
+class ObserverState:
+ """Thread-safe mailbox used by Smriti's asynchronous live observer."""
+ def __init__(self):
+  self.lock = threading.Lock()
+  self.busy = False
+  self.last_started = 0.0
+  self.text = "Waiting for a live camera frame."
+  self.time_label = "Not run"
+  self.status = "WAITING FOR CAMERA"
+  self.error = ""
+  self.elapsed_seconds = 0.0
+
+def run_observer_worker(state, image_bytes):
+ """Generate one Granite scene observation without blocking Streamlit's UI."""
+ started = time.perf_counter()
+ try:
+  result = analyze_with_granite(image_bytes, mode="auto_observe", max_side=512)
+  time_label = datetime.now().strftime("%H:%M:%S")
+  status = f"OBSERVER COMPLETE · {result.elapsed_seconds:.1f}s"
+  error = ""
+  try:
+   save_observation(result.text, source="Smriti local Live Observer", model=result.model,
+                    frame_hash=hashlib.sha256(image_bytes).hexdigest())
+  except Exception as save_exc:
+   error = f"Observation succeeded, but memory logging failed: {type(save_exc).__name__}: {save_exc}"
+  with state.lock:
+   state.text = result.text
+   state.time_label = time_label
+   state.status = status
+   state.error = error
+   state.elapsed_seconds = max(result.elapsed_seconds, time.perf_counter() - started)
+ except Exception as exc:
+  with state.lock:
+   state.status = "OBSERVER ERROR"
+   state.error = f"{type(exc).__name__}: {exc}"
+ finally:
+  with state.lock:
+   state.busy = False
+
 class CamState:
  def __init__(self):
   self.lock=threading.Lock()
@@ -79,7 +118,8 @@ defaults={
  "opencv_result_rgb":None,"opencv_metrics":{},"opencv_detections":[],
  "opencv_detection_last_run":0.0,"opencv_detection_error":"",
  "opencv_detection_elapsed":0.0,"opencv_frame_counter":0,
- "observer_last_run_monotonic":0.0
+ "observer_last_run_monotonic":0.0,
+ "observer_state":ObserverState()
 }
 for k,v in defaults.items():
  if k not in st.session_state: st.session_state[k]=v
