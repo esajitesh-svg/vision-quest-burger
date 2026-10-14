@@ -1,5 +1,5 @@
 """Minimal functional Smriti AI UI: camera, scene analysis, Q&A and spoken replies."""
-import base64, hashlib, html, os, threading, time, uuid
+import base64, hashlib, html, os, subprocess, threading, time, uuid
 from datetime import datetime
 import av, cv2, streamlit as st
 from pathlib import Path
@@ -103,7 +103,7 @@ def run_observer_worker(state, image_bytes, max_side, tags, auto_save, save_fram
   if auto_save:
    frame_hash = hashlib.sha256(image_bytes).hexdigest()
    tag_line = " · ".join(f"{key}: {value}" for key, value in tags.items() if value)
-   stored_text = f"[{tag_line}]\\n{result.text}" if tag_line else result.text
+   stored_text = f"[{tag_line}] — {result.text}" if tag_line else result.text
    try:
     save_observation(stored_text, source="Smriti local Live Observer", model=result.model, frame_hash=frame_hash)
    except Exception as save_exc:
@@ -704,5 +704,44 @@ with st.expander("Service status / setup"):
  ready,msg=local_granite_status(); st.write("Local AI service:",msg)
  st.write("Selected mode:", mode)
  st.write("Demo Mode does not call an AI model. Live Mode uses local Ollama Granite: " + GRANITE_MODEL + ".")
- st.write("Voice uses browser speech recognition in a hands-free turn cycle after you press ACTIVATE LISTENING. The browser pauses while Smriti answers and resumes after speaking; typed questions remain available.")
- st.caption("For Live Mode, run Ollama on this same PC and confirm the Granite model appears in ollama list. This local Ollama connection will not work from a cloud-hosted Streamlit server.")
+ st.write("Voice uses browser speech recognition in a hands-free turn cycle after you press ACTIVATE LISTENING. Raw mic audio is saved only if you explicitly press RECORD AUDIO CLIP; video is saved only after you explicitly start recording.")
+ st.caption("Observation text, detected-object labels, and conversations are archived locally when automatic saving is enabled. Audio/video recordings are separate user-started clips. Names and places are manually entered tags, not inferred identity or GPS.")
+ try:
+  archive_root = get_archive_dir()
+  st.write("Local archive:", str(archive_root))
+ except Exception as archive_exc:
+  st.warning(f"Archive directory unavailable: {archive_exc}")
+ try:
+  opencl_available = bool(cv2.ocl.haveOpenCL())
+  st.write("OpenCV OpenCL support:", "Available in this OpenCV build" if opencl_available else "Not available in this OpenCV build")
+  st.caption("Local YOLOX tries OpenCL when available and falls back to CPU if the driver or device cannot execute it.")
+ except Exception as accel_exc:
+  st.write("OpenCV GPU diagnostics:", f"Unavailable ({type(accel_exc).__name__})")
+ try:
+  ps = subprocess.run(["ollama", "ps"], capture_output=True, text=True, timeout=3, check=False)
+  if ps.returncode == 0 and ps.stdout.strip():
+   st.write("Ollama loaded-model / processor status:")
+   st.code(ps.stdout.strip()[:2000], language="text")
+  elif ps.returncode == 0:
+   st.caption("Ollama is installed, but no model is currently listed as loaded. Start a Live Observer request, then check this status again.")
+  else:
+   st.caption("Could not query the Ollama process status; verify Ollama is running in PowerShell.")
+ except (OSError, subprocess.TimeoutExpired):
+  st.caption("Ollama command-line diagnostics unavailable in this process; verify Ollama is running.")
+ st.components.v1.html(
+  """<div style="font:12px system-ui;padding:9px;border:1px solid #24505c;border-radius:8px;background:#07131a;color:#d7eef5">
+  <b>Browser graphics capability</b><div id="smriti-gpu-diagnostic" style="margin-top:6px">Checking WebGL / WebGPU…</div>
+  <div style="color:#87a5b2;margin-top:4px">WebGL/WebGPU support does not automatically accelerate Python or Ollama inference. Model acceleration is reported separately above.</div></div>
+  <script>
+  (async()=>{
+   const node=document.getElementById("smriti-gpu-diagnostic");
+   let gl="unavailable";
+   try{const canvas=document.createElement("canvas");gl=canvas.getContext("webgl2")?"WebGL 2 available":(canvas.getContext("webgl")?"WebGL available":"WebGL unavailable");}catch(e){}
+   let gpu="WebGPU unavailable";
+   try{if(navigator.gpu){const adapter=await navigator.gpu.requestAdapter();gpu=adapter?"WebGPU adapter available in browser":"WebGPU API present, but no adapter";}}catch(e){gpu="WebGPU adapter unavailable in this context";}
+   node.textContent=gl+" · "+gpu;
+  })();
+  </script>""",
+  height=105,
+ )
+ st.caption("For local inference, run Ollama on this same PC and confirm granite3.2-vision:2b appears in ollama list. This local connection will not work from a cloud-hosted Streamlit server.")
