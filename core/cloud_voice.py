@@ -187,7 +187,7 @@ def answer_voice_query(
                 "For broad recall requests such as 'I forgot' or 'help me remember', review the supplied notes and "
                 "offer the closest explicitly saved fact. Phrase it as 'A note you saved says...' rather than claiming "
                 "to know exactly what the user forgot; if several notes could fit, offer brief choices. "
-                "Never invent observations or memories, identify a person from the camera, diagnose a condition, "
+                "Never invent observations or memories, identify a person from the camera or by matching a saved portrait, diagnose a condition, "
                 "or claim certainty the evidence does not support. If the context does not contain the answer, "
                 "say you do not have that information yet. General greetings and simple general questions are "
                 "okay. Do not claim to have saved anything unless the app confirms it."
@@ -207,7 +207,7 @@ def answer_voice_query(
             json={
                 "model": MODEL_ID,
                 "stream": False,
-                "max_tokens": 180,
+                "max_tokens": 140,
                 "temperature": 0.2,
                 "messages": messages,
             },
