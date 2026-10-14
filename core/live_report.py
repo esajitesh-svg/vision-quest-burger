@@ -97,7 +97,17 @@ def build_live_report(
                     confidence = 0.0
                 box = item.get("box") if isinstance(item.get("box"), dict) else {}
                 position = _position_for_box(box, width, height)
-                lines.append(f"{index}. {label} — {confidence:.0%} confidence; approximate position: {position}.")
+                if box and all(key in box for key in ("xmin", "ymin", "xmax", "ymax")):
+                    bounds = (
+                        f"box ({box['xmin']}, {box['ymin']}) to "
+                        f"({box['xmax']}, {box['ymax']})"
+                    )
+                else:
+                    bounds = "box coordinates unavailable"
+                lines.append(
+                    f"{index}. {label} — {confidence:.0%} confidence; "
+                    f"approximate position: {position}; {bounds}."
+                )
         else:
             lines.append(
                 "No objects were returned above the selected confidence threshold. "
