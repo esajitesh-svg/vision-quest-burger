@@ -2,6 +2,7 @@
 import hashlib, html, threading, time
 from datetime import datetime
 import av, cv2, streamlit as st
+from pathlib import Path
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
 from core.cloud_vision import analyze_image, model_status
 from core.cloud_voice import answer_voice_query, transcribe_audio
@@ -9,6 +10,7 @@ from core.cloud_db import search_activity_for_voice, save_conversation_turn, sav
 from core.voice import build_speech_html
 
 st.set_page_config(page_title="Smriti AI",page_icon="✦",layout="wide",initial_sidebar_state="collapsed")
+browser_voice_component=st.components.v1.declare_component("smriti_browser_voice",path=str(Path(__file__).resolve().parent/"components"/"browser_voice"))
 st.markdown("""<style>
 .stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"]{background:#050a10;color:#d9edf4}
 [data-testid="stHeader"]{background:#050a10}[data-testid="stMainBlockContainer"]{max-width:1500px;padding:1rem 1.4rem}
@@ -29,7 +31,7 @@ class Processor:
   arr=frame.to_ndarray(format="bgr24")
   with self.state.lock: self.state.frame=arr.copy()
   return av.VideoFrame.from_ndarray(arr,format="bgr24")
-defaults={"cam_state":CamState(),"analysis":"No scene analysis yet. Start the camera and analyse a frame.","analysis_time":"Not run","chat":[],"audio_hash":"","status":"READY"}
+defaults={"cam_state":CamState(),"analysis":"No scene analysis yet. Start the camera and analyse a frame.","analysis_time":"Not run","chat":[],"audio_hash":"","voice_event_id":"","last_transcript":"","speech_text":"","speech_seq":0,"status":"READY"}
 for k,v in defaults.items():
  if k not in st.session_state: st.session_state[k]=v
 
@@ -39,9 +41,14 @@ with l:
  st.markdown('<div class="panel"><div class="kicker">02 / ASK SMRITI</div>',unsafe_allow_html=True)
  question=st.text_input("Question",placeholder="What can you see right now?",label_visibility="collapsed",key="question")
  send=st.button("SEND QUESTION",use_container_width=True)
- audio=st.audio_input("Or record a voice question",sample_rate=16000,key="voice_input")
- ah=hashlib.sha256(audio.getvalue()).hexdigest() if audio else ""
- send_audio=bool(audio and ah!=st.session_state.audio_hash)
+ voice_event=browser_voice_component(enabled=True,busy=st.session_state.status.startswith("THINKING"),language="en-IN",rate=.92,speech_text=st.session_state.speech_text,speech_sequence=st.session_state.speech_seq,speech_kind="reply",last_transcript=st.session_state.last_transcript,voice_error="",key="smriti_live_browser_voice",default=None)
+ voice_question=""
+ if isinstance(voice_event,dict):
+  eid=str(voice_event.get("event_id",""))
+  if eid and eid!=st.session_state.voice_event_id:
+   st.session_state.voice_event_id=eid
+   if voice_event.get("event")=="transcript": voice_question=str(voice_event.get("transcript","")).strip()
+   elif voice_event.get("event")=="status": st.session_state.status=str(voice_event.get("message","READY"))[:100]
  st.markdown('</div>',unsafe_allow_html=True)
 with r:
  st.markdown('<div class="panel"><div class="kicker">03 / LIVE CAMERA FEED</div>',unsafe_allow_html=True)
@@ -77,13 +84,9 @@ if analyze:
    st.rerun()
  except Exception as e: st.session_state.status="ANALYSIS ERROR"; st.error(f"Scene analysis failed: {type(e).__name__}: {e}")
 
-if send or send_audio:
+if send or voice_question:
  try:
-  transcript=question.strip() if send else ""
-  if send_audio:
-   raw=audio.getvalue()
-   with st.spinner("Transcribing your voice…"): transcript=transcribe_audio(raw,content_type=getattr(audio,"type",None) or "audio/wav")
-   st.session_state.audio_hash=ah
+  transcript=question.strip() if send else voice_question
   if not transcript: st.warning("Type a question or record a voice question first.")
   else:
    st.session_state.status="THINKING / GENERATING REPLY"
@@ -96,6 +99,7 @@ if send or send_audio:
     memories=search_activity_for_voice(transcript,limit=8)
     reply=answer_voice_query(transcript,latest_observation={"text":st.session_state.analysis,"timestamp":st.session_state.analysis_time,"mode":"auto_observe"},memories=memories,conversation_history=[{"question":x["q"],"reply":x["a"]} for x in st.session_state.chat[-4:]],live_image_bytes=live)
    st.session_state.chat.append({"q":transcript,"a":reply}); st.session_state.chat=st.session_state.chat[-12:]; st.session_state.status="REPLY READY"
+   st.session_state.last_transcript=transcript; st.session_state.speech_text=reply; st.session_state.speech_seq+=1
    try: save_conversation_turn(transcript,reply,source="Simple Smriti",used_live_camera=live is not None)
    except Exception: pass
    st.rerun()
@@ -105,5 +109,5 @@ if st.session_state.chat:
   st.components.v1.html(build_speech_html(st.session_state.chat[-1]["a"],language="en-IN",rate=.92,widget_label="▶ SPEAK REPLY",autoplay=False),height=100,scrolling=False)
 with st.expander("Service status / setup"):
  ready,msg=model_status(); st.write("AI service:",msg)
- st.write("Voice input is record-then-send. Spoken output uses the browser speech engine; press Speak latest reply if autoplay is blocked.")
+ st.write("Voice uses browser speech recognition in a hands-free turn cycle after you press ACTIVATE LISTENING. The browser pauses while Smriti answers and resumes after speaking; typed questions remain available.")
  st.caption("Configure HF_TOKEN in Streamlit Secrets or environment variables. Never commit API keys. Camera access requires browser permission and HTTPS.")
