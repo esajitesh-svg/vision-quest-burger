@@ -33,6 +33,7 @@ jobs:
           Path("/tmp/smriti-browser-voice.js").write_text(script, encoding="utf-8")
           PY
           node --check /tmp/smriti-browser-voice.js
+          node tests/browser_voice_smoke.cjs components/browser_voice/index.html
 
       - name: Compile all Python source
         run: python -m compileall -q app.py core tests
