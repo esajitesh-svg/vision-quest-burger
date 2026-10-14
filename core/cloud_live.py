@@ -28,6 +28,7 @@ def process_live_frame(
     max_side: int = MAX_FRAME_EDGE,
     enhance: bool = False,
     encode_jpeg: bool = True,
+    compute_metrics: bool = True,
 ):
     """Resize and inspect a BGR video frame; optionally encode it for later analysis."""
     if not isinstance(frame_bgr, np.ndarray) or frame_bgr.size == 0:
@@ -46,20 +47,22 @@ def process_live_frame(
     else:
         frame = frame_bgr.copy()
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    # Focus/brightness metrics need no full-resolution float64 Laplacian on every frame.
-    # Estimate detail on a <=640 px grayscale sample to reduce per-frame CPU/memory cost.
-    metric_scale = min(1.0, 640.0 / float(max(gray.shape[1], gray.shape[0])))
-    metric_gray = (
-        cv2.resize(
-            gray,
-            (max(1, int(round(gray.shape[1] * metric_scale))), max(1, int(round(gray.shape[0] * metric_scale)))),
-            interpolation=cv2.INTER_AREA,
+    brightness = None
+    sharpness = None
+    if compute_metrics:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # A small grayscale sample is enough for occasional diagnostic metrics.
+        metric_scale = min(1.0, 480.0 / float(max(gray.shape[1], gray.shape[0])))
+        metric_gray = (
+            cv2.resize(
+                gray,
+                (max(1, int(round(gray.shape[1] * metric_scale))), max(1, int(round(gray.shape[0] * metric_scale)))),
+                interpolation=cv2.INTER_AREA,
+            )
+            if metric_scale < 1.0 else gray
         )
-        if metric_scale < 1.0 else gray
-    )
-    brightness = float(cv2.mean(metric_gray)[0])
-    sharpness = float(cv2.Laplacian(metric_gray, cv2.CV_32F).var())
+        brightness = float(cv2.mean(metric_gray)[0])
+        sharpness = float(cv2.Laplacian(metric_gray, cv2.CV_32F).var())
 
     if enhance:
         lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
@@ -78,13 +81,16 @@ def process_live_frame(
     metrics = {
         "width": int(width),
         "height": int(height),
-        "brightness": round(brightness, 1),
-        "sharpness": round(sharpness, 1),
-        "brightness_label": "dark" if brightness < 55 else ("bright" if brightness > 205 else "normal"),
-        "sharpness_label": "possibly soft/blurry" if sharpness < 45 else "reasonable edge detail",
         "jpeg_bytes": len(encoded_bytes),
         "jpeg_quality": 90,
     }
+    if compute_metrics and brightness is not None and sharpness is not None:
+        metrics.update({
+            "brightness": round(brightness, 1),
+            "sharpness": round(sharpness, 1),
+            "brightness_label": "dark" if brightness < 55 else ("bright" if brightness > 205 else "normal"),
+            "sharpness_label": "possibly soft/blurry" if sharpness < 45 else "reasonable edge detail",
+        })
     return frame, encoded_bytes, metrics
 
 
@@ -269,7 +275,8 @@ class LiveMonitorState:
         now = time.monotonic()
         with self.lock:
             self.latest_frame = frame_bgr.copy()
-            self.latest_jpeg = bytes(jpeg_bytes)
+            if jpeg_bytes:
+                self.latest_jpeg = bytes(jpeg_bytes)
             # Hold the clean BGR frame for AI analysis and encode it only when a
             # scene-analysis request is actually reserved, not on every video frame.
             if analysis_frame_bgr is not None:
@@ -278,7 +285,9 @@ class LiveMonitorState:
             else:
                 self.latest_analysis_frame_bgr = None
                 self.latest_analysis_jpeg = bytes(analysis_jpeg if analysis_jpeg is not None else jpeg_bytes)
-            self.latest_metrics = dict(metrics)
+            combined_metrics = dict(self.latest_metrics)
+            combined_metrics.update(metrics)
+            self.latest_metrics = combined_metrics
             self.frame_count += 1
             self.last_frame_time = now
 
