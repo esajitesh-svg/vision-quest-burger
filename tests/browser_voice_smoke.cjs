@@ -55,15 +55,38 @@ const elements = Object.fromEntries(
 const listeners = {};
 const posted = [];
 const utterances = [];
+let nextTimerId = 0;
+const timers = new Map();
+function mockSetTimeout(callback, delay = 0) {
+  const id = ++nextTimerId;
+  timers.set(id, { callback, delay });
+  return id;
+}
+function mockClearTimeout(id) { timers.delete(id); }
+function runTimerByDelay(delay) {
+  for (const [id, timer] of timers.entries()) {
+    if (timer.delay === delay) {
+      timers.delete(id);
+      timer.callback();
+      return true;
+    }
+  }
+  return false;
+}
 const synth = {
   paused: false,
   speaking: false,
+  silenceNext: false,
   cancel() { this.speaking = false; },
   resume() { this.paused = false; },
   getVoices() { return [{ lang: "en-IN", name: "Test voice" }]; },
   speak(utterance) {
     utterances.push(utterance);
     this.speaking = true;
+    if (this.silenceNext) {
+      this.silenceNext = false;
+      return; // Simulate a browser that drops the first utterance.
+    }
     if (utterance.onstart) utterance.onstart();
   }
 };
@@ -79,8 +102,8 @@ const context = {
   window: win,
   document: { getElementById(id) { return elements[id]; } },
   SpeechSynthesisUtterance: FakeUtterance,
-  setTimeout() { return 1; },
-  clearTimeout() {},
+  setTimeout: mockSetTimeout,
+  clearTimeout: mockClearTimeout,
   Date,
   Math,
   String,
@@ -115,6 +138,16 @@ render({ ...baseArgs, speech_text: "The camera sees a blue notebook.", speech_se
 assert.equal(utterances.length, countAfterTest + 1, "new AI reply should be sent to speechSynthesis");
 assert.equal(utterances.at(-1).text, "The camera sees a blue notebook.");
 
+// Simulate a browser that fails to start the first AI utterance. The component
+// should automatically retry once without requiring another user gesture.
+synth.silenceNext = true;
+render({ ...baseArgs, speech_text: "This answer should retry automatically.", speech_sequence: 2 });
+assert.equal(utterances.at(-1).text, "This answer should retry automatically.");
+assert.ok(runTimerByDelay(1800), "speech-start watchdog should be scheduled");
+assert.ok(runTimerByDelay(300), "failed reply should schedule one automatic retry");
+assert.equal(utterances.at(-1).text, "This answer should retry automatically.");
+assert.equal(utterances.filter(u => u.text === "This answer should retry automatically.").length, 2);
+
 // A reply that exists before the iframe's first render must not be marked consumed silently.
 const secondElements = Object.fromEntries(
   ["start", "stop", "test", "replay", "status", "pulse", "heard"].map(id => [id, new FakeElement(id)])
@@ -140,8 +173,8 @@ vm.runInNewContext(match[1], {
   window: secondWindow,
   document: { getElementById(id) { return secondElements[id]; } },
   SpeechSynthesisUtterance: FakeUtterance,
-  setTimeout() { return 1; },
-  clearTimeout() {},
+  setTimeout: mockSetTimeout,
+  clearTimeout: mockClearTimeout,
   Date, Math, String, Number, Boolean, Object
 }, { timeout: 1000 });
 secondListeners.message({ data: { type: "streamlit:render", args: {
@@ -150,4 +183,4 @@ secondListeners.message({ data: { type: "streamlit:render", args: {
 assert.equal(secondUtterances.length, 1, "first-render queued speech must not be dropped");
 assert.equal(secondUtterances[0].text, "A queued first reply.");
 
-console.log("browser voice smoke test passed: test, new reply, and initial queued reply all reach speechSynthesis");
+console.log("browser voice smoke test passed: test, new reply, one dropped reply retry, and initial queued reply all reach speechSynthesis");
