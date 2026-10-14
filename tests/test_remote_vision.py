@@ -111,7 +111,7 @@ def test_high_detail_live_observation_preserves_image_detail_and_budget(monkeypa
 
     assert result.original_size == (1920, 1080)
     assert result.processed_size == (1280, 720)
-    assert calls["payload"]["max_tokens"] == 700
+    assert calls["payload"]["max_tokens"] == 450
     content = calls["payload"]["messages"][0]["content"]
     assert "FINE DETAILS" in content[0]["text"]
     data_url = content[1]["image_url"]["url"]
