@@ -201,7 +201,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
     setStatus("Voice link stopped.");
   }
 
-  function speakUpdate(text, sequence, kind = "reply") {
+  function speakUpdate(text, sequence, kind = "reply", retryAttempt = 0) {
     lastSpokenText = String(text || "");
     lastSpokenKind = String(kind || "reply");
     replayButton.disabled = !lastSpokenText;
@@ -260,16 +260,38 @@ button:disabled{opacity:.38;cursor:not-allowed}
     utterance.onerror = event => {
       if (generation !== speechGeneration) return;
       clearTimeout(speechStartWatchdog);
+      const reason = String(event && event.error || "unknown");
+      // Browser speech can occasionally drop the first utterance after cancel/resume.
+      // Retry one AI reply automatically before asking the user to use manual replay.
+      if (requestedKind === "reply" && retryAttempt < 1) {
+        setStatus("Speech playback failed (" + reason + "). Retrying the answer once…", true);
+        const failedGeneration = generation;
+        setTimeout(() => {
+          if (failedGeneration === speechGeneration) {
+            speakUpdate(text, sequence, requestedKind, retryAttempt + 1);
+          }
+        }, 300);
+        return;
+      }
       speaking = false;
       currentSpeechKind = "";
       currentSpeechStarted = false;
       awaitingReply = false;
-      const reason = String(event && event.error || "unknown");
       setStatus("Speech playback failed (" + reason + "). Click REPLAY LAST to retry.");
       if (desiredListening) scheduleRestart(250);
     };
     speechStartWatchdog = setTimeout(() => {
       if (generation !== speechGeneration || currentSpeechStarted || !speaking) return;
+      if (requestedKind === "reply" && retryAttempt < 1) {
+        setStatus("Automatic speech did not start. Retrying the answer once…", true);
+        const failedGeneration = generation;
+        setTimeout(() => {
+          if (failedGeneration === speechGeneration) {
+            speakUpdate(text, sequence, requestedKind, retryAttempt + 1);
+          }
+        }, 300);
+        return;
+      }
       speaking = false;
       currentSpeechKind = "";
       awaitingReply = false;
