@@ -493,9 +493,8 @@ with vision_tab:
         def on_live_video_frame(frame):
             try:
                 frame_bgr = frame.to_ndarray(format="bgr24")
-                # The detector receives the same current frame shown to the user.
-                # It runs locally for each frame delivered by WebRTC; no old API box
-                # result is copied onto a newer frame.
+                # Local detector inference is launched asynchronously on copied frames.
+                # The callback itself should only do the lightweight video pipeline.
                 processed_bgr, _unused_jpeg, metrics = process_live_frame(
                     frame_bgr,
                     max_side=live_processing_max_side,
@@ -700,7 +699,7 @@ with vision_tab:
                 inference_ms = frame_metrics.get("detector_ms") if frame_metrics else None
                 inference_fps = frame_metrics.get("detector_fps") if frame_metrics else None
                 detector_cols = st.columns(3, gap="small")
-                detector_cols[0].metric("Objects in current frame", len(current_detections))
+                detector_cols[0].metric("Objects in recent scan", len(current_detections))
                 detector_cols[1].metric(
                     "Local detector",
                     "LIVE / ON" if live_object_detection and realtime_detector is not None else ("OFF" if not live_object_detection else "UNAVAILABLE"),
