@@ -181,7 +181,6 @@ def render_live_analyser():
    except Exception as cv_exc:
     st.error(f"Live OpenCV analyser failed: {type(cv_exc).__name__}: {cv_exc}")
 
-render_live_analyser()
 
 l,r=st.columns([.8,1.5],gap="large")
 with l:
