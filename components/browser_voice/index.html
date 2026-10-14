@@ -379,9 +379,9 @@ button:disabled{opacity:.38;cursor:not-allowed}
   // This button reads the latest answer directly from the latest Streamlit render.
   // It provides a genuine user click path even if automatic speech was blocked or delayed.
   speakButton.addEventListener("click", () => {
-    const latestAnswer = String(args.speech_text || "").trim();
+    const latestAnswer = String(args.answer_text || "").trim();
     if (!latestAnswer) {
-      setStatus("No AI answer text has reached the voice panel yet.");
+      setStatus("No AI answer text has reached the voice panel yet. Send a question and wait for the JARVIS reply.");
       return;
     }
     userStopped = false;
@@ -396,7 +396,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
   window.addEventListener("message", event => {
     if (!event.data || event.data.type !== "streamlit:render") return;
     args = event.data.args || {};
-    speakButton.disabled = !String(args.speech_text || "").trim();
+    speakButton.disabled = !String(args.answer_text || "").trim();
     startButton.disabled = !args.enabled || desiredListening;
     startButton.textContent = desiredListening ? "● LISTENING" : "🎙 ACTIVATE LISTENING";
     stopButton.disabled = !desiredListening && !speaking;
