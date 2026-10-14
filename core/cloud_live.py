@@ -68,6 +68,94 @@ def process_live_frame(frame_bgr: np.ndarray, max_side: int = MAX_FRAME_EDGE, en
     return frame, encoded.tobytes(), metrics
 
 
+def render_cv_view(
+    frame_bgr: np.ndarray,
+    mode: str = "COLOR + HUD",
+    canny_low: int = 55,
+    canny_high: int = 140,
+    frame_count: int = 0,
+) -> np.ndarray:
+    """Render a live OpenCV diagnostic view without changing the AI input frame."""
+    if not isinstance(frame_bgr, np.ndarray) or frame_bgr.size == 0:
+        raise ValueError("Cannot render an empty OpenCV frame.")
+    if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
+        raise ValueError("OpenCV display input must have three color channels.")
+
+    source = frame_bgr.copy()
+    gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
+    low = max(0, min(254, int(canny_low)))
+    high = max(low + 1, min(255, int(canny_high)))
+
+    if mode == "GRAYSCALE":
+        display = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    elif mode == "CANNY EDGE MAP":
+        edges = cv2.Canny(gray, low, high)
+        display = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+    elif mode == "CONTOUR MAP":
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        _, mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        display = source.copy()
+        visible = [contour for contour in contours if cv2.contourArea(contour) >= 120]
+        cv2.drawContours(display, visible, -1, (70, 255, 115), 2)
+        for contour in visible[:30]:
+            x, y, width, height = cv2.boundingRect(contour)
+            if width > 24 and height > 20:
+                cv2.rectangle(display, (x, y), (x + width, y + height), (255, 210, 60), 1)
+    elif mode == "ADAPTIVE THRESHOLD":
+        mask = cv2.adaptiveThreshold(
+            cv2.GaussianBlur(gray, (5, 5), 0),
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            21,
+            5,
+        )
+        display = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+    elif mode == "HSV SATURATION":
+        saturation = cv2.cvtColor(source, cv2.COLOR_BGR2HSV)[:, :, 1]
+        display = cv2.applyColorMap(saturation, cv2.COLORMAP_TURBO)
+    else:
+        # COLOR + HUD is the default and preserves the normal color image.
+        display = source.copy()
+        height, width = display.shape[:2]
+        cx, cy = width // 2, height // 2
+        hud_color = (255, 235, 70)
+        cv2.line(display, (cx - 22, cy), (cx - 7, cy), hud_color, 1, cv2.LINE_AA)
+        cv2.line(display, (cx + 7, cy), (cx + 22, cy), hud_color, 1, cv2.LINE_AA)
+        cv2.line(display, (cx, cy - 22), (cx, cy - 7), hud_color, 1, cv2.LINE_AA)
+        cv2.line(display, (cx, cy + 7), (cx, cy + 22), hud_color, 1, cv2.LINE_AA)
+        cv2.circle(display, (cx, cy), 4, hud_color, 1, cv2.LINE_AA)
+        arm = max(12, min(30, width // 18, height // 12))
+        margin = 10
+        for x, y, sx, sy in [
+            (margin, margin, 1, 1),
+            (width - margin, margin, -1, 1),
+            (margin, height - margin, 1, -1),
+            (width - margin, height - margin, -1, -1),
+        ]:
+            cv2.line(display, (x, y), (x + sx * arm, y), hud_color, 2, cv2.LINE_AA)
+            cv2.line(display, (x, y), (x, y + sy * arm), hud_color, 2, cv2.LINE_AA)
+
+    height, width = display.shape[:2]
+    # Scanner rails and telemetry make the feed a working vision canvas, not a webpage card.
+    cv2.rectangle(display, (0, 0), (width, 32), (4, 14, 20), thickness=-1)
+    cv2.rectangle(display, (0, height - 25), (width, height), (4, 14, 20), thickness=-1)
+    label = f"VISIONQUEST // {mode}"
+    cv2.putText(display, label[:64], (10, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.47, (90, 240, 255), 1, cv2.LINE_AA)
+    cv2.putText(
+        display,
+        f"FRAME {max(0, int(frame_count)):06d}  |  {width}x{height}  |  OPENCV PIPELINE",
+        (10, height - 8),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.39,
+        (165, 222, 230),
+        1,
+        cv2.LINE_AA,
+    )
+    return display
+
+
 class LiveMonitorState:
     """Thread-safe state owned by one Streamlit browser session."""
 
@@ -75,6 +163,7 @@ class LiveMonitorState:
         self.lock = threading.RLock()
         self.latest_frame: np.ndarray | None = None
         self.latest_jpeg: bytes | None = None
+        self.latest_analysis_jpeg: bytes | None = None
         self.latest_metrics: dict[str, Any] = {}
         self.frame_count = 0
         self.last_frame_time = 0.0
@@ -95,12 +184,20 @@ class LiveMonitorState:
         self.latest_observation: dict[str, Any] | None = None
         self.latest_analysis_error = ""
 
-    def update_frame(self, frame_bgr: np.ndarray, jpeg_bytes: bytes, metrics: dict[str, Any]) -> None:
+    def update_frame(
+        self,
+        frame_bgr: np.ndarray,
+        jpeg_bytes: bytes,
+        metrics: dict[str, Any],
+        analysis_jpeg: bytes | None = None,
+    ) -> None:
         """Called from WebRTC's video callback thread. Do not call Streamlit here."""
         now = time.monotonic()
         with self.lock:
             self.latest_frame = frame_bgr.copy()
             self.latest_jpeg = bytes(jpeg_bytes)
+            # The user can inspect CV renderings, but AI receives the color analysis frame.
+            self.latest_analysis_jpeg = bytes(analysis_jpeg if analysis_jpeg is not None else jpeg_bytes)
             self.latest_metrics = dict(metrics)
             self.frame_count += 1
             self.last_frame_time = now
@@ -215,14 +312,14 @@ class LiveMonitorState:
         """Reserve newest frame for one analysis; force bypasses sampling interval."""
         now = time.monotonic()
         with self.lock:
-            if self.analysis_busy or not self.latest_jpeg:
+            if self.analysis_busy or not self.latest_analysis_jpeg:
                 return None
             interval = min(60, max(1, int(interval_seconds)))
             if not force and self.last_analysis_started is not None and now - self.last_analysis_started < interval:
                 return None
             self.analysis_busy = True
             self.last_analysis_started = now
-            return bytes(self.latest_jpeg)
+            return bytes(self.latest_analysis_jpeg)
 
     def finish_analysis(self, observation: dict[str, Any] | None = None, error: str = "") -> None:
         with self.lock:
