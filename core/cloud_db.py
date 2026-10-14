@@ -441,13 +441,18 @@ def search_activity_for_voice(query: str, limit: int = 10) -> list[dict]:
 
 
 def export_activity_csv() -> bytes:
-    """Export recent activity as a portable UTF-8 CSV backup."""
+    """Export all stored conversation and observation records as a portable CSV backup."""
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow(["record_type", "timestamp", "source", "user_text", "assistant_text", "observation", "model"])
-    for row in list_conversation_turns(limit=1000):
+    with connect() as conn:
+        turns = conn.execute("SELECT * FROM conversation_turns ORDER BY id DESC").fetchall()
+        observations = conn.execute("SELECT * FROM observations ORDER BY id DESC").fetchall()
+    for raw in turns:
+        row = dict(raw)
         writer.writerow(["conversation", row.get("created_at", ""), row.get("source", ""), row.get("user_text", ""), row.get("assistant_text", ""), "", ""])
-    for row in list_observations(limit=1000):
+    for raw in observations:
+        row = dict(raw)
         writer.writerow(["observation", row.get("observed_at", row.get("created_at", "")), row.get("source", ""), "", "", row.get("note", ""), row.get("model", "")])
     return output.getvalue().encode("utf-8-sig")
 
@@ -541,7 +546,12 @@ def export_memories_csv() -> bytes:
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow(["person_name", "relationship", "created_at", "note", "source"])
-    for row in list_memories(limit=1000):
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT m.*,p.name AS person_name,p.relationship "
+            "FROM memories m JOIN people p ON p.id=m.person_id ORDER BY m.id DESC"
+        ).fetchall()
+    for row in (dict(item) for item in rows):
         values = [row["person_name"], row["relationship"], row["created_at"], row["note"], row["source"]]
         safe = [
             ("'" + value)
