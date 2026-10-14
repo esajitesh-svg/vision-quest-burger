@@ -1130,6 +1130,19 @@ with vision_tab:
                         "AI status: generating a reply…" if voice_snapshot["processing"]
                         else ("Reply completed." if voice_snapshot["latest_reply"] else "Ready for your first spoken question.")
                     )
+                    browser_status = str(
+                        st.session_state.get(
+                            "live_jarvis_browser_status",
+                            "Waiting for microphone permission and a recognized question.",
+                        )
+                    )
+                    browser_status_code = str(
+                        st.session_state.get("live_jarvis_browser_status_code", "idle")
+                    )
+                    if browser_status_code in {"recognition_error", "unsupported"}:
+                        st.warning("Browser microphone status: " + browser_status)
+                    else:
+                        st.caption("Browser microphone status: " + browser_status)
                     if voice_snapshot["error"]:
                         st.warning(f"Smriti notice: {voice_snapshot['error']}")
                     if voice_snapshot["latest_transcript"]:
