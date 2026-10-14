@@ -189,10 +189,13 @@ def run_live_voice_worker(voice_state, live_state, pcm_clip: bytes) -> None:
             image_bytes = live_state.get_latest_analysis_jpeg(max_side=512)
 
         live_status = live_state.get_status()
+        # Give the assistant the notes most relevant to this utterance rather than
+        # the ten newest notes, which may belong to a completely different topic.
+        relevant_memories = search_memories(transcript, limit=10)
         reply = answer_voice_query(
             transcript,
             latest_observation=live_status.get("latest_observation"),
-            memories=list_memories(limit=10),
+            memories=relevant_memories,
             conversation_history=voice_state.history_snapshot(),
             live_image_bytes=image_bytes,
         )
