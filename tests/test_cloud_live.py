@@ -18,6 +18,23 @@ def _test_frame(width: int = 640, height: int = 360) -> np.ndarray:
     return frame
 
 
+def test_fresh_analysis_jpeg_can_be_encoded_without_locking_scene_analysis():
+    state = LiveMonitorState()
+    frame = _test_frame(640, 360)
+    state.update_frame(
+        frame,
+        b"",
+        {"width": 640, "height": 360},
+        analysis_frame_bgr=frame,
+    )
+
+    encoded = state.get_latest_analysis_jpeg(max_side=320)
+    assert encoded and encoded[:2] == bytes([255, 216])
+    decoded = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert decoded.shape[:2] == (180, 320)
+    assert state.get_status()["analysis_busy"] is False
+
+
 def test_live_frame_can_skip_jpeg_encoding_for_camera_callback():
     frame, encoded, metrics = process_live_frame(
         _test_frame(1280, 720), max_side=1280, encode_jpeg=False
