@@ -336,7 +336,7 @@ with vision_tab:
     with live_tab:
         st.markdown("<div class='cv-workbench-label'>01 / LIVE SENSOR INPUT · WEBCAM</div><div class='cv-feed-heading'>LIVE OPTICAL FEED // REAL-TIME CV PIPELINE</div>", unsafe_allow_html=True)
         st.write("VisionQuest runs local OpenCV DNN object detection on every frame delivered by the live camera stream, drawing current-frame boxes and confidence labels. A separate hosted vision-language model explains sampled scenes. Object inference runs on the app host, so detections do not depend on per-frame API calls; available frame rate depends on the server CPU.")
-        st.caption("Camera video is sent to the hosted app for processing. Object detection is local to the app server; only scene-explanation samples use the external vision-language provider. Silent recording is optional (up to 60 seconds / 25 MB). Use consented test scenes.")
+        st.caption("Camera video is sent to the hosted app for processing. Capture target defaults to Full HD 1920×1080 with higher JPEG quality; the browser may negotiate lower based on camera/device/network. Full HD uses more bandwidth and CPU. Object detection is local to the app server; only scene-explanation samples use the external vision-language provider. Silent recording is optional (up to 60 seconds / 25 MB). Use consented test scenes.")
         with st.expander("⚙️ PERCEPTION / CAMERA CONTROLS", expanded=False):
             live_auto_analyze = st.checkbox(
                 "Enable automatic scene explanation",
@@ -351,6 +351,24 @@ with vision_tab:
                 key="live_object_detection",
                 help="A local OpenCV DNN YOLOX model runs on every frame delivered by the camera stream. Object-detection frames are not sent to an external detection API.",
             )
+            camera_resolution_label = st.selectbox(
+                "Camera capture / processing resolution",
+                options=[
+                    "Full HD · 1920 × 1080",
+                    "HD · 1280 × 720",
+                    "Standard · 640 × 360",
+                ],
+                index=0,
+                key="live_camera_resolution",
+                help="Requests this resolution from the browser camera and processes the image at up to the selected long-edge size. The device/browser may negotiate a lower actual resolution, and Full HD uses more bandwidth/CPU.",
+            )
+            if camera_resolution_label.startswith("Full HD"):
+                live_capture_width, live_capture_height, live_processing_max_side = 1920, 1080, 1920
+            elif camera_resolution_label.startswith("HD"):
+                live_capture_width, live_capture_height, live_processing_max_side = 1280, 720, 1280
+            else:
+                live_capture_width, live_capture_height, live_processing_max_side = 640, 360, 640
+
             detection_threshold = st.slider(
                 "Minimum object confidence",
                 min_value=15,
@@ -452,7 +470,7 @@ with vision_tab:
                 # It runs locally for each frame delivered by WebRTC; no old API box
                 # result is copied onto a newer frame.
                 processed_bgr, analysis_jpeg, metrics = process_live_frame(
-                    frame_bgr, max_side=640, enhance=live_enhance
+                    frame_bgr, max_side=live_processing_max_side, enhance=live_enhance
                 )
                 detections = []
                 detector_result = None
@@ -502,7 +520,7 @@ with vision_tab:
                     )
 
                 ok, display_encoded = cv2.imencode(
-                    ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 82]
+                    ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 90]
                 )
                 display_jpeg = display_encoded.tobytes() if ok else analysis_jpeg
                 # The live view and recording use the annotated frame; scene-analysis
@@ -524,9 +542,9 @@ with vision_tab:
                 rtc_configuration=rtc_configuration,
                 media_stream_constraints={
                     "video": {
-                        "width": {"ideal": 640},
-                        "height": {"ideal": 360},
-                        "frameRate": {"ideal": 10, "max": 12},
+                        "width": {"ideal": live_capture_width},
+                        "height": {"ideal": live_capture_height},
+                        "frameRate": {"ideal": 15, "max": 20},
                     },
                     "audio": False,
                 },
@@ -538,8 +556,8 @@ with vision_tab:
                     muted=True,
                     style={
                         "width": "100%",
-                        "height": "calc(100vh - 320px)",
-                        "minHeight": "360px",
+                        "height": "calc(100vh - 190px)",
+                        "minHeight": "480px",
                         "objectFit": "contain",
                         "backgroundColor": "#000000",
                     },
