@@ -376,7 +376,7 @@ with vision_tab:
                     "Standard · 640 × 360",
                 ],
                 index=1,
-                key="live_camera_resolution",
+                key="live_camera_resolution_latency",
                 help="Defaults to HD for a smoother cloud stream. Full HD is available, but uses more upload bandwidth and server CPU; the device/browser may negotiate a lower actual resolution.",
             )
             if camera_resolution_label.startswith("Full HD"):
@@ -401,7 +401,7 @@ with vision_tab:
                 "Scene explanation target interval",
                 options=[1, 2, 5, 10],
                 value=5,
-                key="live_interval_seconds",
+                key="live_interval_seconds_latency",
                 format_func=lambda x: "Every 1 second" if x == 1 else f"Every {x} seconds",
                 help="Defaults to every 5 seconds to reduce remote inference load. Its actual cadence depends on provider latency.",
             )
@@ -428,7 +428,7 @@ with vision_tab:
                     "Maximum detail · 1280 px",
                 ],
                 index=1,
-                key="live_detail",
+                key="live_detail_latency",
                 help="Balanced is the recommended speed/detail trade-off. Maximum detail is slower and best reserved for still frames or fine text.",
             )
             if live_detail.startswith("Fast"):
