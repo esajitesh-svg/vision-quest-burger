@@ -66,14 +66,16 @@ The webpage cannot silently start the camera without a user gesture and browser 
 - The separate vision-language model can run automatic scene explanation at a 5-second target interval by default (1/2/10-second settings are available when enabled). This is not guaranteed to complete every second because remote inference has variable latency. Its frames are sent to the configured provider.
 - Silent MP4 recording captures the displayed CV view, up to 60 seconds or 25 MB. Recordings are temporary and offered for download after stop.
 
-## Voice conversation + speech
+## JARVIS-style voice companion
 
-The **VOICE I/O** tab supports push-to-talk conversation. Record a short question with the browser microphone, press **LISTEN & REPLY**, then read the transcript and the model's answer on screen. Tap **SPEAK REPLY** to hear it with the browser's built-in speech synthesis. The app is not always listening: it only submits audio after the user records a clip and presses the button.
+The **VOICE I/O** tab offers turn-based voice conversation. Start a short recording, ask a question, and stop the recording; VisionQuest automatically submits the clip, transcribes it, prepares a concise answer, and then attempts to speak the new answer using the **same browser-native voice player already used by the website**. A visible replay/stop control remains available if the browser blocks automatic speech. Configure voice language and speaking speed in the companion section.
 
-- Speech-to-text uses Hugging Face Inference Providers with Whisper large-v3. The selected audio clip is uploaded to that provider for transcription; it is not written into the app's memory database.
-- The spoken question and bounded context from the latest completed visual observation plus up to 10 recent saved notes are sent to the configured hosted vision-language model for a short reply. Replies should stick to the supplied context and say when information is missing.
-- Speech playback uses the device/browser's available voices. No separate text-to-speech API key is required, and playback starts only after the user presses **SPEAK REPLY**.
-- For low latency, this is push-to-talk rather than streaming audio. Speech recognition and cloud-model responses depend on network, provider availability, and credits/rate limits. Use fictional profiles and consented test scenes, not sensitive personal or medical data.
+- Speech-to-text uses Hugging Face Inference Providers with Whisper large-v3. The completed audio clip is sent to that provider after recording stops; the microphone is not left running in the background.
+- If the live camera is actively delivering a recent frame and **Use a fresh live camera frame for each question when available** is enabled, that one freshly encoded frame is included in the same hosted reply request. This lets the assistant answer questions about the current view without running a separate image-analysis request first. If no recent frame is available, it falls back to the latest completed visual observation.
+- Replies may use up to four recent conversation turns and up to ten recent saved memory notes, so brief follow-up questions can retain context. Conversation history is held in the browser session; voice clips and transcripts are not automatically added to the memory database.
+- The spoken question, recent note context, and an attached live image (when enabled and available) are sent to the configured hosted model. Do not use real private medical information or people without appropriate consent.
+- Speech synthesis uses the same browser-native helper as the site's Read Aloud controls. No separate text-to-speech API key is required, but the exact installed voice and whether automatic playback is permitted depend on the browser and device.
+- This is turn-based, not hands-free always-listening or streaming audio. Network/provider latency and credits/rate limits still apply.
 
 ## Live auto-storing of summaries
 
