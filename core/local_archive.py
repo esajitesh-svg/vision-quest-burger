@@ -105,27 +105,35 @@ def save_media(
     target = folder / name
     temp = folder / (name + ".part")
     with _ARCHIVE_LOCK:
+        committed = False
         try:
             with temp.open("wb") as handle:
                 handle.write(media)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temp, target)
+            committed = True
+            log = get_archive_dir() / "activity.jsonl"
+            entry = {
+                "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "type": "media_saved",
+                "media_kind": safe_kind,
+                "file": str(target),
+                "mime_type": _clean_label(mime_type, 100),
+                "bytes": len(media),
+                "tags": clean_tags(tags),
+                "metadata": metadata or {},
+            }
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        except Exception:
+            # Do not leave an apparently saved media file behind if its index entry
+            # cannot be written; callers can safely retry without duplicate clips.
+            if committed:
+                target.unlink(missing_ok=True)
+            raise
         finally:
             temp.unlink(missing_ok=True)
-        log = get_archive_dir() / "activity.jsonl"
-        entry = {
-            "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
-            "type": "media_saved",
-            "media_kind": safe_kind,
-            "file": str(target),
-            "mime_type": _clean_label(mime_type, 100),
-            "bytes": len(media),
-            "tags": clean_tags(tags),
-            "metadata": metadata or {},
-        }
-        with log.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
     return target
 
 
