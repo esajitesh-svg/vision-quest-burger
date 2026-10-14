@@ -44,6 +44,9 @@ button:disabled{opacity:.38;cursor:not-allowed}
   let desiredListening = false;
   let speaking = false;
   let recognitionRunning = false;
+  let awaitingReply = false;
+  let previouslyBusy = false;
+  let userStopped = false;
   let initialized = false;
   let lastSpeechSequence = 0;
   let lastResultIndex = 0;
@@ -64,7 +67,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
   }
 
   function scheduleRestart(delay = 220) {
-    if (!desiredListening || speaking || !args.enabled || args.busy) return;
+    if (!desiredListening || speaking || awaitingReply || !args.enabled || args.busy) return;
     clearTimeout(startTimer);
     startTimer = setTimeout(startRecognition, delay);
   }
@@ -92,10 +95,14 @@ button:disabled{opacity:.38;cursor:not-allowed}
         const phrase = result && result[0] ? String(result[0].transcript || "").trim() : "";
         if (!phrase) continue;
         if (result.isFinal) {
+          // Accept one final utterance, then hold the mic until the answer is spoken.
+          awaitingReply = true;
           const eventId = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
           heardNode.textContent = "Heard: " + phrase;
           setStatus("Heard you — preparing a reply…", true);
           sendValue({event: "transcript", event_id: eventId, transcript: phrase});
+          try { rec.stop(); } catch (_) {}
+          return;
         } else {
           partial = phrase;
         }
@@ -120,11 +127,12 @@ button:disabled{opacity:.38;cursor:not-allowed}
     };
     rec.onend = () => {
       recognitionRunning = false;
-      if (desiredListening && !speaking && args.enabled && !args.busy) {
+      if (desiredListening && !speaking && !awaitingReply && args.enabled && !args.busy) {
         scheduleRestart(260);
       } else if (desiredListening && args.busy) {
         setStatus("Smriti is thinking — listening will resume after the reply.", true);
       } else if (!desiredListening) {
+        awaitingReply = false;
         startButton.disabled = !args.enabled;
         startButton.textContent = "🎙 ACTIVATE LISTENING";
         setStatus("Voice link stopped.");
@@ -134,7 +142,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
   }
 
   function startRecognition() {
-    if (!desiredListening || speaking || !args.enabled || args.busy || recognitionRunning) return;
+    if (!desiredListening || speaking || awaitingReply || !args.enabled || args.busy || recognitionRunning) return;
     if (!recognition) recognition = createRecognition();
     if (!recognition) return;
     try {
@@ -151,6 +159,8 @@ button:disabled{opacity:.38;cursor:not-allowed}
       setStatus("Enable LIVE JARVIS in the app first.");
       return;
     }
+    userStopped = false;
+    awaitingReply = false;
     desiredListening = true;
     startButton.disabled = true;
     startButton.textContent = "● LISTENING";
@@ -165,6 +175,8 @@ button:disabled{opacity:.38;cursor:not-allowed}
 
   function stopListening() {
     desiredListening = false;
+    awaitingReply = false;
+    userStopped = true;
     clearTimeout(startTimer);
     if (recognition) {
       try { recognition.stop(); } catch (_) {}
@@ -177,7 +189,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
   }
 
   function speakUpdate(text, sequence) {
-    if (!text || !speech || typeof window.SpeechSynthesisUtterance === "undefined") return;
+    if (userStopped || !text || !speech || typeof window.SpeechSynthesisUtterance === "undefined") return;
     speaking = true;
     if (recognition && recognitionRunning) {
       try { recognition.stop(); } catch (_) {}
@@ -195,6 +207,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
     utterance.onstart = () => setStatus("Smriti is speaking. Listening resumes afterwards.", true);
     utterance.onend = () => {
       speaking = false;
+      awaitingReply = false;
       if (desiredListening && args.enabled) {
         setStatus("Reply finished — listening again.", true);
         startButton.disabled = true;
@@ -207,6 +220,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
     utterance.onerror = () => {
       speaking = false;
       setStatus("Voice playback failed. Check device volume or browser speech voices.");
+      awaitingReply = false;
       if (desiredListening) scheduleRestart(250);
     };
     try { speech.speak(utterance); }
@@ -230,6 +244,8 @@ button:disabled{opacity:.38;cursor:not-allowed}
       setStatus("Smriti is thinking — pausing the mic to avoid capturing unrelated speech.", true);
       try { recognition.stop(); } catch (_) {}
     }
+    const wasBusy = previouslyBusy;
+    previouslyBusy = Boolean(args.busy);
     if (!initialized) {
       initialized = true;
       lastSpeechSequence = Number(args.speech_sequence || 0);
@@ -240,10 +256,15 @@ button:disabled{opacity:.38;cursor:not-allowed}
         lastSpeechSequence = sequence;
         speakUpdate(args.speech_text, sequence);
       }
+      // Recover listening if the model errors out before producing a reply.
+      if (awaitingReply && !args.busy && (wasBusy || args.voice_error)) {
+        awaitingReply = false;
+        setStatus(args.voice_error ? "Reply failed — listening again. Check the notice in the app." : "Ready for your next question.", true);
+      }
       if (args.enabled && !desiredListening && !speaking) {
         setStatus("Ready. Press Activate to begin listening.");
       }
-      if (desiredListening && args.enabled && !args.busy && !speaking && !recognitionRunning) {
+      if (desiredListening && args.enabled && !args.busy && !speaking && !awaitingReply && !recognitionRunning) {
         scheduleRestart(250);
       }
     }
