@@ -19,7 +19,7 @@ import cv2
 import numpy as np
 import requests
 
-REALTIME_DETECTOR_LABEL = "OpenCV Zoo YOLOX-S INT8 · OpenCV DNN CPU · COCO-80"
+REALTIME_DETECTOR_LABEL = "OpenCV Zoo YOLOX-S INT8 · OpenCV DNN auto OpenCL/CPU · COCO-80"
 MODEL_URL = (
     "https://huggingface.co/opencv/opencv_zoo/resolve/main/models/"
     "object_detection_yolox/object_detection_yolox_2022nov_int8.onnx?download=true"
