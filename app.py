@@ -496,8 +496,11 @@ with vision_tab:
                 # The detector receives the same current frame shown to the user.
                 # It runs locally for each frame delivered by WebRTC; no old API box
                 # result is copied onto a newer frame.
-                processed_bgr, analysis_jpeg, metrics = process_live_frame(
-                    frame_bgr, max_side=live_processing_max_side, enhance=live_enhance
+                processed_bgr, _unused_jpeg, metrics = process_live_frame(
+                    frame_bgr,
+                    max_side=live_processing_max_side,
+                    enhance=live_enhance,
+                    encode_jpeg=False,
                 )
                 if live_object_detection and realtime_detector is not None:
                     # Reserve at most one inference task and skip new frames while it is
@@ -575,14 +578,21 @@ with vision_tab:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.42, (100, 255, 180), 1, cv2.LINE_AA,
                     )
 
+                # This JPEG is only for the optional UI snapshot. Keep it lightweight;
+                # the WebRTC video itself is returned as a raw video frame below.
                 ok, display_encoded = cv2.imencode(
-                    ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+                    ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85]
                 )
-                display_jpeg = display_encoded.tobytes() if ok else analysis_jpeg
-                # The live view and recording use the annotated frame; scene-analysis
-                # samples retain the clean color image without boxes or diagnostic text.
+                display_jpeg = display_encoded.tobytes() if ok else b""
+                metrics["jpeg_bytes"] = len(display_jpeg)
+                metrics["jpeg_quality"] = 85
+                # Keep the clean color frame in memory; resize/encode it only when an
+                # AI observation is actually requested (rather than on every camera frame).
                 live_state.update_frame(
-                    display_bgr, display_jpeg, metrics, analysis_jpeg=analysis_jpeg
+                    display_bgr,
+                    display_jpeg,
+                    metrics,
+                    analysis_frame_bgr=processed_bgr,
                 )
                 return av.VideoFrame.from_ndarray(display_bgr, format="bgr24")
             except Exception as exc:
@@ -641,7 +651,7 @@ with vision_tab:
                 # The local detector runs inside the video callback on every delivered frame.
                 # Only natural-language scene explanation uses an asynchronous remote request.
                 if manual_analyze:
-                    sample = live_state.take_analysis_sample(live_interval, force=True)
+                    sample = live_state.take_analysis_sample(live_interval, force=True, max_side=live_max_side)
                     if sample is None:
                         st.warning("No fresh frame is ready or the scene analyzer is already busy.")
                     else:
@@ -652,7 +662,7 @@ with vision_tab:
                         ).start()
                         st.info("Scene analysis started. The live camera and object detector continue while the result is computed.")
                 elif is_playing and live_auto_analyze:
-                    sample = live_state.take_analysis_sample(live_interval)
+                    sample = live_state.take_analysis_sample(live_interval, max_side=live_max_side)
                     if sample is not None:
                         Thread(
                             target=run_live_vision_worker,
@@ -682,7 +692,7 @@ with vision_tab:
                         metric_cols[0].metric("OpenCV", "OFF")
                         metric_cols[1].metric("Image metrics", "Paused")
                     metric_cols[2].metric("Frame", f"{frame_metrics['width']} × {frame_metrics['height']}")
-                    st.caption(f"Latest frame JPEG: {frame_metrics['jpeg_bytes']:,} bytes. Focus is a rough heuristic, not a guarantee of image quality.")
+                    st.caption(f"UI snapshot JPEG: {frame_metrics['jpeg_bytes']:,} bytes at quality {frame_metrics.get('jpeg_quality', 85)}. AI input images are encoded only when an observation request is reserved. Focus is a rough heuristic, not a guarantee of image quality.")
 
                 st.markdown("<div class='cv-workbench-label'>03 / ASYNC OBJECT DETECTION · RECENT RESULTS</div>", unsafe_allow_html=True)
                 detection_status = live_state.detection_snapshot()
