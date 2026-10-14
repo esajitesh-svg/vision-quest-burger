@@ -1167,6 +1167,12 @@ with voice_tab:
         key="voice_auto_speak",
         help="Uses the same browser-native voice as the website's Read Aloud controls. The Speak Reply button remains available if autoplay is blocked.",
     )
+    include_live_frame = st.checkbox(
+        "Use a fresh live camera frame for each question when available",
+        value=True,
+        key="voice_include_live_frame",
+        help="When the camera is actively sending recent frames, attach one fresh image to this submitted question so the answer can describe what the camera sees now.",
+    )
     voice_audio = st.audio_input(
         "Record a short voice question",
         sample_rate=16000,
@@ -1190,13 +1196,29 @@ with voice_tab:
         ):
             st.info("That recording has already been processed. Record a new message to ask another question.")
         else:
+            voice_frame_reserved = False
+            live_image_bytes = None
             try:
-                with st.spinner("Transcribing your question and preparing a short reply…"):
+                with st.spinner("Listening to your question and preparing a spoken reply…"):
                     transcript = transcribe_audio(
                         audio_bytes,
                         content_type=getattr(voice_audio, "type", None) or "audio/wav",
                     )
                     live_context = live_state.get_status().get("latest_observation")
+                    if include_live_frame:
+                        _, _, recent_frame_count, last_frame_time = live_state.snapshot()
+                        frame_is_recent = (
+                            recent_frame_count > 0
+                            and last_frame_time > 0
+                            and (time.monotonic() - last_frame_time) <= 4.0
+                        )
+                        if frame_is_recent:
+                            live_image_bytes = live_state.take_analysis_sample(
+                                5,
+                                force=True,
+                                max_side=512,
+                            )
+                            voice_frame_reserved = live_image_bytes is not None
                     recent_memory_context = list_memories(limit=10)
                     prior_turns = st.session_state.get("voice_chat_history", [])[-4:]
                     reply = answer_voice_query(
@@ -1204,16 +1226,23 @@ with voice_tab:
                         latest_observation=live_context,
                         memories=recent_memory_context,
                         conversation_history=prior_turns,
+                        live_image_bytes=live_image_bytes,
                     )
                 st.session_state["voice_last_audio_hash"] = audio_hash
                 st.session_state["voice_latest_transcript"] = transcript
                 st.session_state["voice_latest_reply"] = reply
+                st.session_state["voice_latest_used_live_camera"] = live_image_bytes is not None
                 st.session_state["voice_auto_speak_pending"] = bool(auto_speak_reply)
                 history = st.session_state.get("voice_chat_history", [])
                 history.append({"question": transcript, "reply": reply})
                 st.session_state["voice_chat_history"] = history[-10:]
             except Exception as exc:
                 st.error(f"Voice conversation could not complete: {exc}")
+            finally:
+                if voice_frame_reserved:
+                    # Release the shared scene-analysis slot after using this image
+                    # as context for the voice question.
+                    live_state.finish_analysis()
 
     latest_voice_question = st.session_state.get("voice_latest_transcript", "")
     latest_voice_reply = st.session_state.get("voice_latest_reply", "")
@@ -1237,7 +1266,11 @@ with voice_tab:
         )
         if autoplay_this_reply:
             st.caption("Your new answer is being spoken in the website voice. If your browser blocks automatic speech, tap Speak Reply.")
-    st.caption("When the answer finishes, record the next question to continue the conversation. The last four turns are included for follow-up context; the latest completed visual observation and recent saved memory notes may also be used.")
+        if st.session_state.get("voice_latest_used_live_camera", False):
+            st.caption("This answer used a fresh frame from the live camera and recent memory context.")
+        else:
+            st.caption("No fresh camera frame was attached. This answer used the latest completed scene observation and recent saved notes, if available.")
+    st.caption("When the answer finishes, record the next question to continue the conversation. The last four turns are included for follow-up context; recent saved memory notes may also be used.")
     with st.expander("Recent voice turns"):
         voice_history = st.session_state.get("voice_chat_history", [])
         if voice_history:
