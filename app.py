@@ -404,12 +404,22 @@ with vision_tab:
                     placeholder="What objects and actions are visible?",
                 )
             live_detail = st.selectbox(
-                "Scene model frame size",
-                options=["Fast · 384 px", "Balanced · 512 px"],
-                index=0,
+                "AI observation image detail",
+                options=[
+                    "Fast · 512 px",
+                    "Balanced · 768 px",
+                    "Maximum detail · 1280 px",
+                ],
+                index=2,
                 key="live_detail",
+                help="Higher detail gives the scene model more image evidence for small objects and readable text, but takes longer and may use more inference credits.",
             )
-            live_max_side = 384 if live_detail.startswith("Fast") else 512
+            if live_detail.startswith("Fast"):
+                live_max_side = 512
+            elif live_detail.startswith("Balanced"):
+                live_max_side = 768
+            else:
+                live_max_side = 1280
             st.markdown("<div class='cv-workbench-label'>DISPLAY PIPELINE · OPENCV OPERATORS</div>", unsafe_allow_html=True)
             pipe_mode_col, pipe_low_col, pipe_high_col = st.columns([1.5, 1, 1], gap="small")
             with pipe_mode_col:
@@ -520,7 +530,7 @@ with vision_tab:
                     )
 
                 ok, display_encoded = cv2.imencode(
-                    ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+                    ".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 94]
                 )
                 display_jpeg = display_encoded.tobytes() if ok else analysis_jpeg
                 # The live view and recording use the annotated frame; scene-analysis
