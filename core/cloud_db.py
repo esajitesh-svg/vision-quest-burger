@@ -100,7 +100,7 @@ def init_db():
             "FOREIGN KEY(person_id) REFERENCES people(id) ON DELETE CASCADE)"
         )
         portrait_type = "BYTEA"
-        id_type = "BIGSERIAL"
+        id_type = "BIGSERIAL PRIMARY KEY"
         bool_type = "BOOLEAN NOT NULL DEFAULT FALSE"
     else:
         people_sql = (
@@ -317,7 +317,7 @@ def search_activity_for_voice(query: str, limit: int = 10) -> list[dict]:
     ranked: list[tuple[int, int, dict]] = []
     seen: set[tuple[str, str]] = set()
 
-    for index, row in enumerate(search_memories_for_voice(value, limit=bounded_limit)):
+    for index, row in enumerate(search_memories_for_voice(value, limit=min(5, bounded_limit))):
         normalized = dict(row)
         normalized.setdefault("created_at", "")
         normalized.setdefault("source", "Saved memory")
