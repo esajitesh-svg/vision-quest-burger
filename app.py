@@ -1043,23 +1043,72 @@ with vision_tab:
                         key="smriti_live_browser_voice",
                         default=None,
                     )
-                    if isinstance(voice_event, dict) and voice_event.get("event") == "transcript":
+                    if isinstance(voice_event, dict):
                         event_id = str(voice_event.get("event_id", ""))
-                        transcript = str(voice_event.get("transcript", "")).strip()
+                        event_type = str(voice_event.get("event", ""))
                         previous_event_id = st.session_state.get("live_jarvis_last_browser_event_id", "")
-                        if event_id and event_id != previous_event_id and transcript:
+                        if event_id and event_id != previous_event_id:
                             st.session_state["live_jarvis_last_browser_event_id"] = event_id
-                            if live_voice_state.begin_processing():
-                                try:
-                                    Thread(
-                                        target=run_live_voice_text_worker,
-                                        args=(live_voice_state, live_state, transcript),
-                                        daemon=True,
-                                    ).start()
-                                except Exception as exc:
-                                    live_voice_state.fail_turn(
-                                        f"Could not start reply worker: {type(exc).__name__}: {exc}"
-                                    )
+                            if event_type == "status":
+                                st.session_state["live_jarvis_browser_status"] = str(
+                                    voice_event.get("message", "Browser voice status unavailable.")
+                                )[:300]
+                                st.session_state["live_jarvis_browser_status_code"] = str(
+                                    voice_event.get("code", "info")
+                                )[:60]
+                            elif event_type == "transcript":
+                                transcript = str(voice_event.get("transcript", "")).strip()
+                                if transcript:
+                                    st.session_state["live_jarvis_browser_status"] = "Question recognized; sending it to Smriti AI."
+                                    st.session_state["live_jarvis_browser_status_code"] = "question_received"
+                                    if live_voice_state.begin_processing():
+                                        try:
+                                            Thread(
+                                                target=run_live_voice_text_worker,
+                                                args=(live_voice_state, live_state, transcript),
+                                                daemon=True,
+                                            ).start()
+                                        except Exception as exc:
+                                            live_voice_state.fail_turn(
+                                                f"Could not start reply worker: {type(exc).__name__}: {exc}"
+                                            )
+
+                    # Browser speech recognition may be blocked or unavailable, so provide
+                    # a deterministic typed path through the same AI answer worker.
+                    with st.form("live_jarvis_manual_question_form", clear_on_submit=True):
+                        typed_question = st.text_input(
+                            "Or type a question for Smriti",
+                            max_chars=1200,
+                            placeholder="Ask a general question, or ask about the current camera view…",
+                            key="live_jarvis_manual_question",
+                        )
+                        typed_submit = st.form_submit_button(
+                            "SEND QUESTION TO SMRITI",
+                            type="primary",
+                            use_container_width=True,
+                        )
+                    if typed_submit:
+                        question = str(typed_question or "").strip()
+                        if not question:
+                            st.warning("Type a question before sending it.")
+                        elif not status[0]:
+                            st.error(status[1])
+                        elif live_voice_state.begin_processing():
+                            st.session_state["live_jarvis_browser_status"] = "Typed question sent; waiting for the AI reply."
+                            st.session_state["live_jarvis_browser_status_code"] = "question_received"
+                            try:
+                                Thread(
+                                    target=run_live_voice_text_worker,
+                                    args=(live_voice_state, live_state, question),
+                                    daemon=True,
+                                ).start()
+                            except Exception as exc:
+                                live_voice_state.fail_turn(
+                                    f"Could not start reply worker: {type(exc).__name__}: {exc}"
+                                )
+                        else:
+                            st.info("Smriti is already working on a question. Wait for the current reply.")
+
                 voice_snapshot = live_voice_state.snapshot()
 
                 if not is_playing:
