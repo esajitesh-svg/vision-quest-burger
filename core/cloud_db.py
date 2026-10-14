@@ -321,7 +321,7 @@ def search_observations(query: str, limit: int = 50) -> list[dict]:
     if not value:
         return []
     tokens = [
-        token for token in re.findall(r"[\\w]+", value.casefold(), flags=re.UNICODE)
+        token for token in re.findall(r"[\w]+", value.casefold(), flags=re.UNICODE)
         if len(token) > 1 and token not in _MEMORY_QUERY_STOPWORDS
     ][:8]
     if not tokens:
@@ -351,7 +351,7 @@ def search_conversation_history(query: str, limit: int = 50) -> list[dict]:
     if not value:
         return []
     tokens = [
-        token for token in re.findall(r"[\\w]+", value.casefold(), flags=re.UNICODE)
+        token for token in re.findall(r"[\w]+", value.casefold(), flags=re.UNICODE)
         if len(token) > 1 and token not in _MEMORY_QUERY_STOPWORDS
     ][:8]
     if not tokens:
