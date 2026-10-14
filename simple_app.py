@@ -191,7 +191,7 @@ def start_local_video_capture(state, tags):
  folder.mkdir(parents=True, exist_ok=True)
  pending_path = folder / (".pending_" + uuid.uuid4().hex + ".mp4")
  writer = cv2.VideoWriter(
-  str(pending_path), cv2.VideoWriter_fourcc(*"mp4v"), 15.0, (640, 360)
+  str(pending_path), cv2.VideoWriter_fourcc(*"mp4v"), 20.0, (640, 360)
  )
  if not writer.isOpened():
   writer.release()
