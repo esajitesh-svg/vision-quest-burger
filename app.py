@@ -337,62 +337,102 @@ with vision_tab:
         st.markdown("<div class='cv-workbench-label'>01 / LIVE SENSOR INPUT · WEBCAM</div><div class='cv-feed-heading'>LIVE OPTICAL FEED // REAL-TIME CV PIPELINE</div>", unsafe_allow_html=True)
         st.write("VisionQuest now runs two separate perception paths: OpenCV draws a live diagnostic canvas, while a hosted detector identifies common object categories and returns confidence-labelled bounding boxes. A vision-language model separately explains sampled scenes. The detector and scene model run asynchronously, so remote requests do not block the camera's frame-processing callback.")
         st.warning("Live video is streamed to the app host. Frames sent for AI analysis are forwarded to an external inference provider. Recording is silent video only, limited to 60 seconds / 25 MB, and downloadable after stopping. Use consented fictional scenes only.")
-        live_auto_analyze = st.checkbox("Enable automatic scene explanation", value=bool(status[0]), disabled=not status[0], key="live_auto_observe_always", help="A hosted vision-language model describes the scene, actions, approximate locations, and readable text from sampled color frames.")
-        live_object_detection = st.checkbox(
-            "Enable live object detection + label boxes",
-            value=bool(status[0]),
-            disabled=not status[0],
-            key="live_object_detection",
-            help="Runs a separate hosted object detector. It returns category labels, confidence scores, and bounding boxes; it does not identify a person by name.",
-        )
-        detector_settings = st.columns([1, 1], gap="small")
-        with detector_settings[0]:
-            live_detection_interval = st.select_slider(
-                "Object scan interval",
-                options=[2, 3, 5, 10],
-                value=3,
-                key="live_detection_interval",
-                format_func=lambda x: f"Every {x} seconds",
-                help="Only sampled frames are sent to hosted object detection. Actual update speed depends on provider latency and rate limits.",
+        with st.expander("⚙️ PERCEPTION / CAMERA CONTROLS", expanded=False):
+            live_auto_analyze = st.checkbox(
+                "Enable automatic scene explanation",
+                value=bool(status[0]),
+                disabled=not status[0],
+                key="live_auto_observe_always",
+                help="A hosted vision-language model gives the written scene explanation from sampled color frames.",
             )
-        with detector_settings[1]:
+            live_object_detection = st.checkbox(
+                "Enable continuous local object detection + bounding boxes",
+                value=True,
+                key="live_object_detection",
+                help="A local OpenCV DNN YOLOX model runs on every frame delivered by the camera stream. Object-detection frames are not sent to an external detection API.",
+            )
             detection_threshold = st.slider(
-                "Minimum confidence",
-                min_value=25,
+                "Minimum object confidence",
+                min_value=15,
                 max_value=80,
-                value=40,
+                value=35,
                 step=5,
                 key="live_detection_confidence",
                 format="%d%%",
-                help="Raise this to hide weaker predictions; lower it to see more possible objects with more false positives.",
+                help="Lower values show more detections but can include false positives; higher values hide weaker predictions.",
             ) / 100.0
-        live_opencv_always = st.checkbox("Keep OpenCV processing active on every live frame", value=True, key="live_opencv_always", help="OpenCV transforms each incoming frame while the camera is streaming. Turn this off only for troubleshooting.")
-        live_interval = st.select_slider("AI scene explanation target interval", options=[1, 2, 5, 10], value=1, key="live_interval_seconds", format_func=lambda x: "Every 1 second" if x == 1 else f"Every {x} seconds", help="Scene explanations are serialized; slow provider requests can make results arrive less often than this target.")
-        live_mode_label = st.selectbox("Live analysis task", options=list(MODE_LABELS.values()), index=0, key="live_auto_mode_label", help="Auto-observe summarizes the overall scene, clearly visible objects and positions, visible activities, and readable text. Other modes focus on one task.")
-        live_mode = next(k for k, v in MODE_LABELS.items() if v == live_mode_label)
-        live_question = ""
-        if live_mode == "visual_question":
-            live_question = st.text_input("Question about each sampled frame", max_chars=300, key="live_visual_question", placeholder="What objects are visible?")
-        live_detail = st.selectbox("AI frame size", options=["Fast · 384 px", "Balanced · 512 px"], index=0, key="live_detail")
-        live_max_side = 384 if live_detail.startswith("Fast") else 512
-
-        st.markdown("<div class='cv-workbench-label'>02 / DISPLAY PIPELINE · OPENCV OPERATORS</div>", unsafe_allow_html=True)
-        pipe_mode_col, pipe_low_col, pipe_high_col = st.columns([1.5, 1, 1], gap="small")
-        with pipe_mode_col:
-            live_view_mode = st.selectbox(
-                "CV display operator",
-                options=["COLOR + HUD", "GRAYSCALE", "CANNY EDGE MAP", "CONTOUR MAP", "ADAPTIVE THRESHOLD", "HSV SATURATION"],
-                index=0,
-                key="live_cv_display_mode",
-                help="Changes the live visual canvas. The AI still receives the color analysis frame.",
+            live_opencv_always = True
+            live_interval = st.select_slider(
+                "Scene explanation target interval",
+                options=[1, 2, 5, 10],
+                value=1,
+                key="live_interval_seconds",
+                format_func=lambda x: "Every 1 second" if x == 1 else f"Every {x} seconds",
+                help="Only the written scene-analysis model is sampled. Its actual cadence depends on provider latency.",
             )
-        with pipe_low_col:
-            canny_low = st.slider("Canny low", min_value=0, max_value=200, value=55, step=5, key="live_canny_low")
-        with pipe_high_col:
-            canny_high = st.slider("Canny high", min_value=20, max_value=255, value=140, step=5, key="live_canny_high")
-        live_enhance = st.checkbox("Apply OpenCV contrast enhancement to the AI input frame", value=False, key="live_opencv_enhance")
-        recording_seconds = st.select_slider("Maximum clip duration", options=[15, 30, 60], value=30, key="live_record_seconds", format_func=lambda x: f"{x} seconds")
-        st.caption("Object labels and scene explanations send sampled camera frames to Hugging Face Inference Providers and may consume credits or hit rate limits. Boxes are predictions, can be wrong, and may stay on screen briefly while the next result is computed. The model labels object categories; it does not identify a person by name.")
+            live_mode_label = st.selectbox(
+                "Scene analysis task",
+                options=list(MODE_LABELS.values()),
+                index=0,
+                key="live_auto_mode_label",
+            )
+            live_mode = next(k for k, v in MODE_LABELS.items() if v == live_mode_label)
+            live_question = ""
+            if live_mode == "visual_question":
+                live_question = st.text_input(
+                    "Question about each sampled frame",
+                    max_chars=300,
+                    key="live_visual_question",
+                    placeholder="What objects and actions are visible?",
+                )
+            live_detail = st.selectbox(
+                "Scene model frame size",
+                options=["Fast · 384 px", "Balanced · 512 px"],
+                index=0,
+                key="live_detail",
+            )
+            live_max_side = 384 if live_detail.startswith("Fast") else 512
+            st.markdown("<div class='cv-workbench-label'>DISPLAY PIPELINE · OPENCV OPERATORS</div>", unsafe_allow_html=True)
+            pipe_mode_col, pipe_low_col, pipe_high_col = st.columns([1.5, 1, 1], gap="small")
+            with pipe_mode_col:
+                live_view_mode = st.selectbox(
+                    "CV display operator",
+                    options=["COLOR + HUD", "GRAYSCALE", "CANNY EDGE MAP", "CONTOUR MAP", "ADAPTIVE THRESHOLD", "HSV SATURATION"],
+                    index=0,
+                    key="live_cv_display_mode",
+                )
+            with pipe_low_col:
+                canny_low = st.slider("Canny low", min_value=0, max_value=200, value=55, step=5, key="live_canny_low")
+            with pipe_high_col:
+                canny_high = st.slider("Canny high", min_value=20, max_value=255, value=140, step=5, key="live_canny_high")
+            live_enhance = st.checkbox(
+                "Apply OpenCV contrast enhancement to AI input",
+                value=False,
+                key="live_opencv_enhance",
+            )
+            recording_seconds = st.select_slider(
+                "Maximum silent recording length",
+                options=[15, 30, 60],
+                value=30,
+                key="live_record_seconds",
+                format_func=lambda x: f"{x} seconds",
+            )
+            st.caption(
+                "Local YOLOX detects object categories on each frame delivered to the server. "
+                "The written scene explanation still uses sampled frames through the configured external vision provider. "
+                "Camera access needs your permission and a click on START; once started, the feed continues until stopped."
+            )
+
+        realtime_detector = None
+        detector_init_error = ""
+        if live_object_detection:
+            try:
+                with st.spinner("Loading local YOLOX object detector… first load downloads the compact model"):
+                    realtime_detector = get_realtime_detector()
+            except Exception as exc:
+                detector_init_error = f"{type(exc).__name__}: {exc}"
+                live_state.finish_detection(error=detector_init_error)
+                st.error(f"LOCAL DETECTOR UNAVAILABLE · {detector_init_error}")
 
         rtc_configuration = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
         turn_url = get_secret("TURN_SERVER_URL")
