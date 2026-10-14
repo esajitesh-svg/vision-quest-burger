@@ -432,9 +432,9 @@ with vision_tab:
                     "Balanced · 768 px",
                     "Maximum detail · 1280 px",
                 ],
-                index=1,
-                key="live_detail_latency",
-                help="Balanced is the recommended speed/detail trade-off. Maximum detail is slower and best reserved for still frames or fine text.",
+                index=0,
+                key="live_detail_smooth",
+                help="Fast is the default to keep observations responsive. Balanced and Maximum detail are available for harder scenes or small text.",
             )
             if live_detail.startswith("Fast"):
                 live_max_side = 512
