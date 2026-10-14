@@ -1,6 +1,6 @@
 # Smriti AI / VisionQuest — Stark-inspired Cloud HUD
 
-The primary **LIVE HUD** workspace opens on the live camera panel with a short animated VisionQuest boot splash. The interface uses a dark, cyan-accented command-console style. OpenCV runs on every incoming live frame by default, while **Auto-observe** sends sampled frames to the hosted vision model to summarize the scene, visible objects/locations, actions, and readable text. Automatic AI observation is enabled by default at a selected 15/30/60-second interval; **Analyze Current Frame Now** is also available. A browser speech button can pronounce the latest observation.
+The primary **LIVE HUD** workspace opens on the live camera panel with a short animated VisionQuest boot splash. The interface uses a dark, cyan-accented command-console style. OpenCV runs on every incoming live frame by default, while **Auto-observe** sends sampled frames to the hosted vision model to summarize the scene, visible objects/locations, actions, and readable text. The target AI request interval defaults to **1 second**, with 2-, 5-, and 10-second options. Requests are serialized; if remote inference takes longer than the interval, the next request waits for the previous one to finish. **Analyze Current Frame Now** is also available. A browser speech button can pronounce the latest observation.
 
 This is a **cloud-deployment edition** of VisionQuest. The Streamlit app does not load PyTorch/Transformers locally (which can exceed Streamlit Community Cloud's memory limit); instead it sends sampled images to a hosted Hugging Face Inference Provider using `Qwen/Qwen2.5-VL-3B-Instruct:fastest`. Users can open the HTTPS URL from a phone, tablet, or computer.
 
@@ -62,8 +62,8 @@ The phone or laptop camera is captured **in the browser** and the image bytes ar
 
 1. Open the **LIVE HUD** main tab, then **LIVE SENSING // WEBCAM**.
 2. Allow camera permission and click **START** inside the WebRTC player. If the status stays idle, check browser permission and network connectivity.
-3. Choose a live analysis mode: scene overview, objects and approximate positions, visible-text reading, short spoken description, or custom visual question.
-4. Use **Analyze Current Frame Now** for an immediate answer, or enable periodic analysis at 15, 30, or 60 seconds. OpenCV resizes frames, reports rough brightness/focus metrics, and can apply optional contrast enhancement before sampled frames are analyzed by SmolVLM.
+3. Choose a live analysis mode: automatic scene + objects + activities, scene overview, objects and approximate positions, visible-text reading, short spoken description, or custom visual question.
+4. Use **Analyze Current Frame Now** for an immediate answer, or enable auto-observe with a 1-second target interval (2/5/10 seconds are also available). The model is not run concurrently on every frame; if a request takes longer than the interval, VisionQuest waits for it to finish. OpenCV resizes frames, reports rough brightness/focus metrics, and can apply optional contrast enhancement before sampled frames are analyzed by SmolVLM.
 5. Use **Pronounce Observation** to read a result aloud. Browser voice availability varies by device and language.
 6. Click **Start MP4 recording** to record a silent clip. Stop it manually or let the selected 15/30/60-second limit end it; the final clip is offered as a download. Temporary files are removed after finalization. Each browser session has its own camera and recording state.
 5. Stop the WebRTC stream when finished. The stream sends live images to the cloud host while it is running; do not use it without permission from anyone in view.
