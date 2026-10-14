@@ -24,7 +24,7 @@ MAX_AUDIO_BYTES = 20 * 1024 * 1024
 
 
 def transcribe_audio(audio_bytes: bytes, content_type: str = "audio/wav") -> str:
-    """Transcribe one user-recorded audio clip through Hugging Face Inference Providers."""
+    """Transcribe a short user-submitted or live-session speech clip through Hugging Face."""
     if not audio_bytes:
         raise ValueError("Record a short voice message first.")
     if len(audio_bytes) > MAX_AUDIO_BYTES:
