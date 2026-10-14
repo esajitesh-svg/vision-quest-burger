@@ -92,24 +92,41 @@ class ObserverState:
   self.error = ""
   self.elapsed_seconds = 0.0
 
-def run_observer_worker(state, image_bytes, max_side):
- """Generate one Granite scene observation without blocking Streamlit's UI."""
+def run_observer_worker(state, image_bytes, max_side, tags, auto_save, save_frame):
+ """Generate one Granite scene observation off the UI thread and persist it locally."""
  started = time.perf_counter()
  try:
   result = analyze_with_granite(image_bytes, mode="auto_observe", max_side=max_side)
   time_label = datetime.now().strftime("%H:%M:%S")
   status = f"OBSERVER COMPLETE · {result.elapsed_seconds:.1f}s"
-  error = ""
-  try:
-   save_observation(result.text, source="Smriti local Live Observer", model=result.model,
-                    frame_hash=hashlib.sha256(image_bytes).hexdigest())
-  except Exception as save_exc:
-   error = f"Observation succeeded, but memory logging failed: {type(save_exc).__name__}: {save_exc}"
+  errors = []
+  if auto_save:
+   frame_hash = hashlib.sha256(image_bytes).hexdigest()
+   tag_line = " · ".join(f"{key}: {value}" for key, value in tags.items() if value)
+   stored_text = f"[{tag_line}]\\n{result.text}" if tag_line else result.text
+   try:
+    save_observation(stored_text, source="Smriti local Live Observer", model=result.model, frame_hash=frame_hash)
+   except Exception as save_exc:
+    errors.append(f"Database save failed: {type(save_exc).__name__}: {save_exc}")
+   try:
+    log = archive_event("observation", {
+     "observation": result.text,
+     "model": result.model,
+     "inference_seconds": result.elapsed_seconds,
+     "frame_sha256": frame_hash,
+    }, tags)
+    if save_frame:
+     save_media(
+      "frames", image_bytes, "jpg", "image/jpeg", tags,
+      {"model": result.model, "inference_seconds": result.elapsed_seconds, "frame_sha256": frame_hash},
+     )
+   except Exception as archive_exc:
+    errors.append(f"Local file archive failed: {type(archive_exc).__name__}: {archive_exc}")
   with state.lock:
    state.text = result.text
    state.time_label = time_label
    state.status = status
-   state.error = error
+   state.error = " · ".join(errors)
    state.elapsed_seconds = max(result.elapsed_seconds, time.perf_counter() - started)
  except Exception as exc:
   with state.lock:
@@ -335,7 +352,11 @@ def render_live_observer():
       try:
        threading.Thread(
         target=run_observer_worker,
-        args=(observer_state, encoded.tobytes(), detail_side),
+        args=(
+         observer_state, encoded.tobytes(), detail_side, current_archive_tags(),
+         bool(st.session_state.get("archive_auto_save", True)),
+         bool(st.session_state.get("archive_save_observation_frames", True)),
+        ),
         daemon=True,
         name="smriti-live-observer",
        ).start()
