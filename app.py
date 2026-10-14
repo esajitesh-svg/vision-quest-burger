@@ -451,7 +451,7 @@ else:
     )
 st.caption(
     "Privacy notice: the camera stream is processed on the app host. Local object detection runs there using OpenCV DNN; sampled scene-explanation frames and uploaded images are sent to the configured external vision-language provider. "
-    "The app does not intentionally save source photos, but the provider processes the image request. Use fictional test scenes and obtain consent; do not upload private medical or sensitive imagery."
+    "Camera frames and uploaded images are sent to the configured vision provider for analysis, but are not automatically saved as image files. A profile portrait is stored only when you upload it and confirm permission. Use consented photos, and do not upload private medical or highly sensitive imagery."
 )
 
 vision_tab, people_tab, memory_tab, voice_tab, activity_tab, search_tab, settings_tab = st.tabs(["◉ CV WORKSPACE", "PERSON NODES", "MEMORY INDEX", "VOICE I/O", "ACTIVITY LOG", "QUERY", "RUNTIME"])
@@ -474,7 +474,7 @@ with vision_tab:
                 value=False,
                 disabled=not status[0],
                 key="live_jarvis_voice_enabled",
-                help="Explicitly enables microphone input while the camera session is running. After switching this on, STOP and START the camera again and allow microphone permission.",
+                help="Enables the browser-native voice panel. Start the camera, then press ACTIVATE LISTENING and allow microphone permission when asked. No camera restart is required.",
             )
         with voice_cols[1]:
             live_voice_narrate_scenes = st.checkbox(
@@ -1019,7 +1019,10 @@ with vision_tab:
                         st.success("🎙 LIVE JARVIS READY · activate listening in the voice panel above, then speak naturally")
                     else:
                         st.warning("Start the camera first, then activate the browser voice panel. Press STOP in the voice panel to end listening.")
-                    st.caption(f"Voice status: {voice_snapshot['status']}")
+                    st.caption(
+                        "AI status: generating a reply…" if voice_snapshot["processing"]
+                        else ("Reply completed." if voice_snapshot["latest_reply"] else "Ready for your first spoken question.")
+                    )
                     if voice_snapshot["error"]:
                         st.warning(f"Smriti notice: {voice_snapshot['error']}")
                     if voice_snapshot["latest_transcript"]:
