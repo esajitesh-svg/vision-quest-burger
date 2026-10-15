@@ -126,7 +126,7 @@ def _chat(
             # A bounded CPU thread count avoids over-subscribing a modest desktop.
             "num_thread": max(
                 1,
-                min(8, int(os.getenv("SMRITI_OLLAMA_THREADS", str(max(1, (os.cpu_count() or 6) - 2))))),
+                min(4, int(os.getenv("SMRITI_OLLAMA_THREADS", str(max(2, min(4, (os.cpu_count() or 4) // 2))))),
             ),
             # The previous 2K window rejected normal visual-memory prompts.
             # 4K allows image tokens plus a bounded amount of conversational context.
