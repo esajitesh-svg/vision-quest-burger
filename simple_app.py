@@ -33,7 +33,7 @@ experience_mode = st.radio(
 with st.expander("LOCAL MEMORY + CAPTURE ARCHIVE", expanded=True):
     st.caption("Automatic text memory is local. Audio and video clips are recorded only when you explicitly press their recording buttons; this app does not secretly record people.")
     st.checkbox("Automatically save observations, detected objects, and conversation text", value=True, key="archive_auto_save")
-    st.checkbox("Save a camera still with each completed live observation", value=True, key="archive_save_observation_frames")
+    st.checkbox("Save a camera still with each completed live observation", value=False, key="archive_save_observation_frames", help="Off by default to reduce continuous disk writes. Turn it on when you need image evidence saved.")
     st.text_input("People / names (manual labels only)", key="archive_people_tags", placeholder="Names you have permission to record")
     st.text_input("Place / location label (entered manually)", key="archive_place_tag", placeholder="e.g. home, school, garden")
     st.text_input("Activity / context", key="archive_activity_tag", placeholder="e.g. reading, gardening, meeting")
@@ -87,6 +87,7 @@ class ObserverState:
   self.lock = threading.Lock()
   self.busy = False
   self.last_started = 0.0
+  self.last_completed = 0.0
   self.text = "Waiting for a live camera frame."
   self.partial_text = ""
   self.time_label = "Not run"
@@ -146,6 +147,7 @@ def run_observer_worker(state, image_bytes, max_side, tags, auto_save, save_fram
  finally:
   with state.lock:
    state.busy = False
+   state.last_completed = time.monotonic()
    state.partial_text = ""
 
 class CamState:
@@ -372,7 +374,7 @@ def render_live_analyser():
   else:
    try:
     processed, _, metrics = process_live_frame(
-     cv_frame,max_side=960,enhance=enhance_cv,encode_jpeg=False,compute_metrics=True
+     cv_frame,max_side=640,enhance=enhance_cv,encode_jpeg=False,compute_metrics=True
     )
     st.session_state.opencv_frame_counter += 1
     display = render_cv_view(
@@ -496,9 +498,9 @@ with r:
   media_stream_constraints={
    "video":{
     "facingMode":"user",
-    "width":{"ideal":960,"max":1280},
-    "height":{"ideal":540,"max":720},
-    "frameRate":{"ideal":20,"max":24},
+    "width":{"ideal":640,"max":640},
+    "height":{"ideal":360,"max":360},
+    "frameRate":{"ideal":15,"max":20},
    },
    "audio":False,
   },
@@ -514,7 +516,7 @@ with r:
  render_live_analyser()
  render_video_archive_controls()
 
-@st.fragment(run_every=0.5)
+@st.fragment(run_every=1.0)
 def render_live_observer():
  with st.expander("05 / LIVE OBSERVER // GRANITE VISION", expanded=True):
   st.caption("The camera stays at its higher preview resolution. For smoother descriptions on an 8 GB CPU PC, FAST mode resizes each observation to 384 px and generates a short answer in the background.")
@@ -527,7 +529,7 @@ def render_live_observer():
   )
   detail_side = 384 if detail_label.startswith("FAST") else (640 if detail_label.startswith("Higher") else 512)
   auto_observe = st.checkbox("Enable continuous live observation", value=True, key="smriti_auto_observer")
-  st.caption("Smriti samples the newest camera frame every second and never queues stale frames. Granite analyses one frame at a time; the preview stays live while each description is generated.")
+  st.caption("Performance mode: the camera preview targets 640×360 at 15 FPS. Smriti analyses only one frame at a time and leaves a short pause between observations so the local AI does not monopolise your CPU.")
   run_now = st.button("OBSERVE CURRENT FRAME NOW", use_container_width=True, key="smriti_observe_now")
   now = time.monotonic()
   observer_state = st.session_state.observer_state
@@ -535,8 +537,9 @@ def render_live_observer():
   with observer_state.lock:
    busy = observer_state.busy
    last_started = observer_state.last_started
+   last_completed = observer_state.last_completed
 
-  should_start = run_now or (auto_observe and not busy and now - last_started >= 1.0)
+  should_start = run_now or (auto_observe and not busy and now - max(last_started, last_completed) >= 3.0)
   if should_start and not busy:
    with st.session_state.cam_state.lock:
     frame = st.session_state.cam_state.frame.copy() if st.session_state.cam_state.frame is not None else None
@@ -551,7 +554,7 @@ def render_live_observer():
      st.error("OpenCV could not encode the current camera frame.")
     else:
      with observer_state.lock:
-      if not observer_state.busy and (run_now or now - observer_state.last_started >= 1.0):
+      if not observer_state.busy and (run_now or now - max(observer_state.last_started, observer_state.last_completed) >= 3.0):
        observer_state.busy = True
        observer_state.last_started = now
        launch = True
