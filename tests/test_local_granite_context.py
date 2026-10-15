@@ -78,7 +78,7 @@ def test_question_and_saved_context_are_bounded(monkeypatch):
     assert result == "answer"
     assert "O" * 701 not in prompt
     assert "Q" * 1201 not in prompt
-    assert prompt.count("MEMORY") <= 3
-    assert "MEMORY6:" not in prompt
-    assert "HQ5:" not in prompt
-    assert "HQ4:" in prompt and "HQ5:" not in prompt
+    assert "MEMORY0:" in prompt and "MEMORY1:" in prompt and "MEMORY2:" in prompt
+    assert "MEMORY3:" not in prompt and "MEMORY6:" not in prompt
+    assert "HQ3:" not in prompt
+    assert "HQ4:" in prompt and "HQ5:" in prompt
