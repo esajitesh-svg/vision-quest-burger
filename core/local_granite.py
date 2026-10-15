@@ -7,7 +7,8 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
+import json
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 import requests
@@ -95,6 +96,7 @@ def _chat(
     system: str,
     image_bytes: bytes | None = None,
     num_predict: int = 180,
+    on_partial: Callable[[str], None] | None = None,
 ) -> GraniteResult:
     prompt = (prompt or "").strip()
     if not prompt:
@@ -107,7 +109,7 @@ def _chat(
 
     payload = {
         "model": GRANITE_MODEL,
-        "stream": False,
+        "stream": on_partial is not None,
         "messages": [
             {
                 "role": "system",
@@ -140,6 +142,7 @@ def _chat(
             f"{OLLAMA_BASE_URL}/api/chat",
             json=payload,
             timeout=REQUEST_TIMEOUT,
+            stream=on_partial is not None,
         )
     except requests.ConnectionError as exc:
         raise RuntimeError(
@@ -157,11 +160,38 @@ def _chat(
     if not response.ok:
         detail = response.text[:240] if response.text else "No details supplied."
         raise RuntimeError(f"Ollama returned HTTP {response.status_code}: {detail}")
-    try:
-        data = response.json()
-        raw = str(data.get("message", {}).get("content", "")).strip()
-    except (ValueError, TypeError, AttributeError) as exc:
-        raise RuntimeError("Ollama returned an invalid chat response.") from exc
+    if on_partial is not None:
+        chunks: list[str] = []
+        try:
+            for line in response.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except (ValueError, TypeError) as exc:
+                    raise RuntimeError("Ollama returned an invalid streaming response.") from exc
+                if not isinstance(chunk, dict):
+                    continue
+                if chunk.get("error"):
+                    raise RuntimeError(f"Ollama streaming error: {str(chunk['error'])[:240]}")
+                piece = str(chunk.get("message", {}).get("content", "") or "")
+                if piece:
+                    chunks.append(piece)
+                    partial = "".join(chunks)
+                    # Avoid exposing common hidden-reasoning prefixes in the live preview.
+                    if not re.match(r"^\\s*(?:thinking\\b|analysis\\b|<think\\b)", partial, re.IGNORECASE):
+                        on_partial(partial)
+                if chunk.get("done"):
+                    break
+        except requests.RequestException as exc:
+            raise RuntimeError("The live observer connection ended before the reply finished.") from exc
+        raw = "".join(chunks).strip()
+    else:
+        try:
+            data = response.json()
+            raw = str(data.get("message", {}).get("content", "")).strip()
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise RuntimeError("Ollama returned an invalid chat response.") from exc
 
     return GraniteResult(
         text=clean_granite_reply(raw),
@@ -174,6 +204,7 @@ def analyze_with_granite(
     image_bytes: bytes,
     mode: str = "auto_observe",
     max_side: int = 512,
+    on_partial: Callable[[str], None] | None = None,
 ) -> GraniteResult:
     """Describe a supplied image locally using the selected Granite vision model."""
     # Automatic observations prioritize latency; manual visual tasks retain more detail.
@@ -198,6 +229,7 @@ def analyze_with_granite(
         image_bytes=prepared_image,
         # Short outputs materially reduce delay between successive live observations.
         num_predict=96 if mode == "auto_observe" else 140,
+        on_partial=on_partial if mode == "auto_observe" else None,
     )
 
 
