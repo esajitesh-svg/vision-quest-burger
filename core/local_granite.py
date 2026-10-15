@@ -107,6 +107,12 @@ def _chat(
             raise ValueError("The camera image exceeds the 8 MB local request limit.")
         message["images"] = [base64.b64encode(image_bytes).decode("ascii")]
 
+    default_threads = max(2, min(4, (os.cpu_count() or 4) // 2))
+    try:
+        configured_threads = int(os.getenv("SMRITI_OLLAMA_THREADS", str(default_threads)))
+    except (TypeError, ValueError):
+        configured_threads = default_threads
+
     payload = {
         "model": GRANITE_MODEL,
         "stream": on_partial is not None,
@@ -124,10 +130,7 @@ def _chat(
         "options": {
             "temperature": 0.2,
             # A bounded CPU thread count avoids over-subscribing a modest desktop.
-            "num_thread": max(
-                1,
-                min(4, int(os.getenv("SMRITI_OLLAMA_THREADS", str(max(2, min(4, (os.cpu_count() or 4) // 2))))),
-            ),
+            "num_thread": max(1, min(4, configured_threads)),
             # The previous 2K window rejected normal visual-memory prompts.
             # 4K allows image tokens plus a bounded amount of conversational context.
             "num_ctx": _context_size(),
