@@ -514,7 +514,7 @@ with r:
  render_live_analyser()
  render_video_archive_controls()
 
-@st.fragment(run_every=1)
+@st.fragment(run_every=0.5)
 def render_live_observer():
  with st.expander("05 / LIVE OBSERVER // GRANITE VISION", expanded=True):
   st.caption("The camera stays at its higher preview resolution. For smoother descriptions on an 8 GB CPU PC, FAST mode resizes each observation to 384 px and generates a short answer in the background.")
