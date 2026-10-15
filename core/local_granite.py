@@ -179,7 +179,7 @@ def _chat(
                     chunks.append(piece)
                     partial = "".join(chunks)
                     # Avoid exposing common hidden-reasoning prefixes in the live preview.
-                    if not re.match(r"^\\s*(?:thinking\\b|analysis\\b|<think\\b)", partial, re.IGNORECASE):
+                    if not re.match(r"^\s*(?:thinking\b|analysis\b|<think\b)", partial, re.IGNORECASE):
                         on_partial(partial)
                 if chunk.get("done"):
                     break
