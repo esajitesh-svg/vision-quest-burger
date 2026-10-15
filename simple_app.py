@@ -506,15 +506,17 @@ with r:
 @st.fragment(run_every=1)
 def render_live_observer():
  with st.expander("05 / LIVE OBSERVER // GRANITE VISION", expanded=True):
-  st.caption("Camera input now requests up to 960×540 for clearer detail. Granite runs in the background and skips overlapping requests, so the UI stays responsive when inference takes longer than one second.")
+  st.caption("The camera stays at its higher preview resolution. For smoother descriptions on an 8 GB CPU PC, FAST mode resizes each observation to 384 px and generates a short answer in the background.")
   detail_label = st.selectbox(
    "Observation detail / speed",
-   ["Fast · 512 px","Balanced · 640 px","Higher detail · 768 px"],
-   index=1,
+   ["FAST · 384 px (recommended)","Balanced · 512 px","Higher detail · 640 px"],
+   index=0,
    key="smriti_observer_detail",
+   help="Lower image detail produces faster scene updates. The camera preview continues independently.",
   )
-  detail_side = 512 if detail_label.startswith("Fast") else (768 if detail_label.startswith("Higher") else 640)
-  auto_observe = st.checkbox("Enable automatic observation every second", value=True, key="smriti_auto_observer")
+  detail_side = 384 if detail_label.startswith("FAST") else (640 if detail_label.startswith("Higher") else 512)
+  auto_observe = st.checkbox("Enable continuous live observation", value=True, key="smriti_auto_observer")
+  st.caption("Smriti samples the newest camera frame every second and never queues stale frames. Granite analyses one frame at a time; the preview stays live while each description is generated.")
   run_now = st.button("OBSERVE CURRENT FRAME NOW", use_container_width=True, key="smriti_observe_now")
   now = time.monotonic()
   observer_state = st.session_state.observer_state
