@@ -35,10 +35,11 @@ def test_context_size_is_bounded_and_bad_values_fall_back(monkeypatch):
 def test_chat_sends_the_configured_context_window(monkeypatch):
     captured = {}
 
-    def fake_post(url, *, json, timeout):
+    def fake_post(url, *, json, timeout, stream=False):
         captured["url"] = url
         captured["payload"] = json
         captured["timeout"] = timeout
+        captured["stream"] = stream
         return FakeResponse()
 
     monkeypatch.setattr(local_granite.requests, "post", fake_post)
@@ -92,12 +93,13 @@ def test_auto_observer_uses_small_image_and_short_output(monkeypatch):
     Image.new("RGB", (1280, 720), color=(40, 80, 120)).save(source, format="PNG")
     captured = {}
 
-    def fake_chat(prompt, *, system, image_bytes=None, num_predict=180):
+    def fake_chat(prompt, *, system, image_bytes=None, num_predict=180, on_partial=None):
         captured.update(
             prompt=prompt,
             system=system,
             image_bytes=image_bytes,
             num_predict=num_predict,
+            on_partial=on_partial,
         )
         return local_granite.GraniteResult("A person is near a desk.", local_granite.GRANITE_MODEL, 0.01)
 
@@ -112,3 +114,66 @@ def test_auto_observer_uses_small_image_and_short_output(monkeypatch):
     with Image.open(BytesIO(captured["image_bytes"])) as image:
         assert image.format == "JPEG"
         assert image.size == (384, 216)
+
+
+
+class FakeStreamingResponse(FakeResponse):
+    def __init__(self, lines):
+        self.lines = lines
+
+    def iter_lines(self, decode_unicode=True):
+        return iter(self.lines)
+
+
+def test_chat_streams_observation_text_incrementally(monkeypatch):
+    import json
+
+    captured = {}
+    response = FakeStreamingResponse([
+        json.dumps({"message": {"content": "The camera "}, "done": False}),
+        json.dumps({"message": {"content": "shows a desk."}, "done": False}),
+        json.dumps({"message": {}, "done": True}),
+    ])
+
+    def fake_post(url, *, json, timeout, stream=False):
+        captured.update(url=url, payload=json, timeout=timeout, stream=stream)
+        return response
+
+    monkeypatch.setattr(local_granite.requests, "post", fake_post)
+    partials = []
+    result = local_granite._chat(
+        "Observe this frame",
+        system="You are Smriti.",
+        num_predict=96,
+        on_partial=partials.append,
+    )
+
+    assert captured["stream"] is True
+    assert captured["payload"]["stream"] is True
+    assert captured["payload"]["options"]["num_predict"] == 96
+    assert partials == ["The camera ", "The camera shows a desk."]
+    assert result.text == "The camera shows a desk."
+
+
+def test_chat_stream_does_not_publish_reasoning_prefixed_output(monkeypatch):
+    import json
+
+    response = FakeStreamingResponse([
+        json.dumps({"message": {"content": "Thinking..."}, "done": False}),
+        json.dumps({"message": {"content": "secret. Final answer: a desk."}, "done": False}),
+        json.dumps({"message": {}, "done": True}),
+    ])
+
+    def fake_post(url, *, json, timeout, stream=False):
+        return response
+
+    monkeypatch.setattr(local_granite.requests, "post", fake_post)
+    partials = []
+    result = local_granite._chat(
+        "Observe this frame",
+        system="You are Smriti.",
+        on_partial=partials.append,
+    )
+
+    assert partials == []
+    assert result.text == "a desk."
