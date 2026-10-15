@@ -173,17 +173,17 @@ def _chat(
 def analyze_with_granite(
     image_bytes: bytes,
     mode: str = "auto_observe",
-    max_side: int = 768,
+    max_side: int = 512,
 ) -> GraniteResult:
     """Describe a supplied image locally using the selected Granite vision model."""
-    prepared_image = prepare_ollama_image(image_bytes, max_side=max_side, quality=84)
+    # Automatic observations prioritize latency; manual visual tasks retain more detail.
+    image_quality = 76 if mode == "auto_observe" else 84
+    prepared_image = prepare_ollama_image(image_bytes, max_side=max_side, quality=image_quality)
     tasks = {
         "auto_observe": (
-            "Observe this camera frame carefully. In 3–5 concise sentences, report the setting, the most important "
-            "visible objects and their positions, any clearly visible activity, and readable text only when legible. "
-            "Mention small or uncertain details as uncertain. Do not identify people, infer relationships, emotions "
-            "or intent, or guess objects hidden by blur or obstruction. Prefer specific visual evidence over generic "
-            "phrases. Do not repeat information."
+            "Give a quick live observation in 1–2 short sentences. State the main visible scene, the most important "
+            "objects and any obvious activity. Mention changes only when clearly visible. Do not identify people, "
+            "infer relationships, emotions or intent, read tiny text, or guess obscured details. Be specific and brief."
         ),
         "scene": "Describe this image in 2 to 4 concise sentences using visible evidence only.",
         "objects": "List clearly visible objects and their positions. Do not guess obscured objects.",
@@ -196,7 +196,8 @@ def analyze_with_granite(
             "relationships, guess emotions or intent, or invent off-screen details."
         ),
         image_bytes=prepared_image,
-        num_predict=180 if mode == "auto_observe" else 140,
+        # Short outputs materially reduce delay between successive live observations.
+        num_predict=96 if mode == "auto_observe" else 140,
     )
 
 
