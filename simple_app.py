@@ -88,6 +88,7 @@ class ObserverState:
   self.busy = False
   self.last_started = 0.0
   self.text = "Waiting for a live camera frame."
+  self.partial_text = ""
   self.time_label = "Not run"
   self.status = "WAITING FOR CAMERA"
   self.error = ""
@@ -96,8 +97,16 @@ class ObserverState:
 def run_observer_worker(state, image_bytes, max_side, tags, auto_save, save_frame):
  """Generate one Granite scene observation off the UI thread and persist it locally."""
  started = time.perf_counter()
+ def publish_partial(text):
+  with state.lock:
+   state.partial_text = text
+   state.status = "STREAMING LIVE OBSERVATION"
+   state.error = ""
+
  try:
-  result = analyze_with_granite(image_bytes, mode="auto_observe", max_side=max_side)
+  result = analyze_with_granite(
+   image_bytes, mode="auto_observe", max_side=max_side, on_partial=publish_partial
+  )
   time_label = datetime.now().strftime("%H:%M:%S")
   status = f"OBSERVER COMPLETE · {result.elapsed_seconds:.1f}s"
   errors = []
@@ -125,6 +134,7 @@ def run_observer_worker(state, image_bytes, max_side, tags, auto_save, save_fram
     errors.append(f"Local file archive failed: {type(archive_exc).__name__}: {archive_exc}")
   with state.lock:
    state.text = result.text
+   state.partial_text = ""
    state.time_label = time_label
    state.status = status
    state.error = " · ".join(errors)
@@ -136,6 +146,7 @@ def run_observer_worker(state, image_bytes, max_side, tags, auto_save, save_fram
  finally:
   with state.lock:
    state.busy = False
+   state.partial_text = ""
 
 class CamState:
  def __init__(self):
@@ -569,17 +580,22 @@ def render_live_observer():
   with observer_state.lock:
    busy = observer_state.busy
    latest_text = observer_state.text
+   partial_text = observer_state.partial_text
    time_label = observer_state.time_label
    status = observer_state.status
    error = observer_state.error
    elapsed = observer_state.elapsed_seconds
 
   if busy:
-   st.info("Observer is analysing the latest frame in the background. It will pick up a new frame when this analysis finishes.")
+   st.caption("● LIVE OBSERVER RUNNING · camera preview remains live")
   if error:
    st.warning(error)
-  st.markdown("**LATEST LIVE OBSERVATION**")
-  st.write(latest_text)
+  if partial_text:
+   st.markdown("**LIVE OBSERVATION · STREAMING**")
+   st.write(partial_text)
+  else:
+   st.markdown("**LATEST LIVE OBSERVATION**")
+   st.write(latest_text)
   st.caption(f"{status} · Last completed observation: {time_label}" + (f" · {elapsed:.1f}s inference" if elapsed else ""))
 
 render_live_observer()
