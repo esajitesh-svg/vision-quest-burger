@@ -82,3 +82,33 @@ def test_question_and_saved_context_are_bounded(monkeypatch):
     assert "MEMORY3:" not in prompt and "MEMORY6:" not in prompt
     assert "HQ3:" not in prompt
     assert "HQ4:" in prompt and "HQ5:" in prompt
+
+
+def test_auto_observer_uses_small_image_and_short_output(monkeypatch):
+    from io import BytesIO
+    from PIL import Image
+
+    source = BytesIO()
+    Image.new("RGB", (1280, 720), color=(40, 80, 120)).save(source, format="PNG")
+    captured = {}
+
+    def fake_chat(prompt, *, system, image_bytes=None, num_predict=180):
+        captured.update(
+            prompt=prompt,
+            system=system,
+            image_bytes=image_bytes,
+            num_predict=num_predict,
+        )
+        return local_granite.GraniteResult("A person is near a desk.", local_granite.GRANITE_MODEL, 0.01)
+
+    monkeypatch.setattr(local_granite, "_chat", fake_chat)
+    result = local_granite.analyze_with_granite(
+        source.getvalue(), mode="auto_observe", max_side=384
+    )
+
+    assert result.text == "A person is near a desk."
+    assert captured["num_predict"] == 96
+    assert "1–2 short sentences" in captured["prompt"]
+    with Image.open(BytesIO(captured["image_bytes"])) as image:
+        assert image.format == "JPEG"
+        assert image.size == (384, 216)
