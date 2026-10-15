@@ -15,6 +15,18 @@ import requests
 GRANITE_MODEL = os.getenv("SMRITI_GRANITE_MODEL", "granite3.2-vision:2b")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 REQUEST_TIMEOUT = (3.05, 90)
+DEFAULT_CONTEXT_SIZE = 4096
+MAX_CONTEXT_SIZE = 8192
+
+
+def _context_size() -> int:
+    """Choose a context window large enough for grounded Q&A and image tokens."""
+    try:
+        requested = int(os.getenv("SMRITI_OLLAMA_CONTEXT", str(DEFAULT_CONTEXT_SIZE)))
+    except (TypeError, ValueError):
+        requested = DEFAULT_CONTEXT_SIZE
+    return max(DEFAULT_CONTEXT_SIZE, min(requested, MAX_CONTEXT_SIZE))
+
 
 
 @dataclass(frozen=True)
@@ -114,7 +126,9 @@ def _chat(
                 1,
                 min(8, int(os.getenv("SMRITI_OLLAMA_THREADS", str(max(1, (os.cpu_count() or 6) - 2))))),
             ),
-            "num_ctx": 1536,
+            # The previous 2K window rejected normal visual-memory prompts.
+            # 4K allows image tokens plus a bounded amount of conversational context.
+            "num_ctx": _context_size(),
             "num_predict": max(32, min(int(num_predict), 500)),
         },
         # Keep the vision model resident while the observer is in use.
@@ -199,21 +213,21 @@ def ask_granite(
     if latest_observation and latest_observation.get("text"):
         context_parts.append(
             "LATEST OBSERVATION (may be a sample; check its source): "
-            + str(latest_observation.get("text", ""))[:1800]
+            + str(latest_observation.get("text", ""))[:700]
         )
     if memories:
         rows = []
-        for row in memories[:5]:
+        for row in memories[:3]:
             note = row.get("note") or row.get("text") or row.get("memory") or ""
             if note:
-                rows.append(str(note)[:350])
+                rows.append(str(note)[:220])
         if rows:
             context_parts.append("RELEVANT SAVED MEMORIES:\n- " + "\n- ".join(rows))
     if conversation_history:
         turns = []
-        for turn in conversation_history[-3:]:
-            q = str(turn.get("question", ""))[:180]
-            a = str(turn.get("reply", ""))[:240]
+        for turn in conversation_history[-2:]:
+            q = str(turn.get("question", ""))[:120]
+            a = str(turn.get("reply", ""))[:160]
             if q and a:
                 turns.append(f"User: {q}\nSmriti: {a}")
         if turns:
@@ -221,7 +235,7 @@ def ask_granite(
     context = "\n\n".join(context_parts)
     prompt = (f"Useful context:\n{context}\n\n" if context else "") + (
         "Answer the user's question in 1–3 short sentences. If evidence is insufficient, say so clearly.\n"
-        f"User question: {str(question or '').strip()}"
+        f"User question: {str(question or '').strip()[:1200]}"
     )
     result = _chat(
         prompt,
